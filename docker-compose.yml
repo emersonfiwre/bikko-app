@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bikko-backend-app
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENV=development
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=bikko
+      - DB_PASSWORD=bikkopass
+      - DB_NAME=bikkodb
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: bikko-postgres-db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=bikko
+      - POSTGRES_PASSWORD=bikkopass
+      - POSTGRES_DB=bikkodb
+    volumes:
+      - bikko_postgres_data:/var/lib/postgresql/data
+      - ./migrations/000001_init_schema.up.sql:/docker-entrypoint-initdb.d/01_init_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bikko -d bikkodb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: bikko-redis-cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - bikko_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  bikko_postgres_data:
+  bikko_redis_data:

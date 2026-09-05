@@ -1,0 +1,32 @@
+# Binaries & Executables
+/server
+/*.exe
+/*.exe~
+/*.dll
+/*.so
+/*.dylib
+/bin/
+
+# Environment Variables & Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Docker & Persistence Data
+.docker/
+docker_data/
+*.db
+*.sqlite
+
+# IDEs & OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
+
+# Test & Coverage
+*.out
+*.prof
+coverage.txt
