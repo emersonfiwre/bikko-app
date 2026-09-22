@@ -9,6 +9,8 @@ type Config struct {
 	Port string
 	Env  string
 
+	JWTSecret string
+
 	// Postgres DB Config
 	DBHost     string
 	DBPort     string
@@ -34,6 +36,8 @@ func LoadConfig() *Config {
 	return &Config{
 		Port: getEnv("PORT", "8080"),
 		Env:  getEnv("ENV", "development"),
+
+		JWTSecret: getEnv("JWT_SECRET", "super-secret-key-bikko-dev"),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -68,3 +72,4 @@ func getEnv(key, fallback string) string {
 	}
 	return fallback
 }
+

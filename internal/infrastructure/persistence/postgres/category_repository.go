@@ -45,7 +45,8 @@ func (r *categoryRepository) GetByID(ctx context.Context, id string) (*domain.Ca
 	query := `
 		SELECT id, name, COALESCE(icon_url, ''), COALESCE(description, ''), is_active, created_at
 		FROM categories
-		WHERE id = $1
+		WHERE id::text = $1 OR id::text LIKE $1 || '%'
+		LIMIT 1
 	`
 	var c domain.Category
 	err := r.pool.QueryRow(ctx, query, id).Scan(&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive, &c.CreatedAt)

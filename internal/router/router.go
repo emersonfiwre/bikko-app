@@ -13,10 +13,14 @@ func SetupRouter(
 	healthCtrl *controller.HealthController,
 	authCtrl *controller.AuthController,
 	profileCtrl *controller.ProfileController,
+	bootstrapCtrl *controller.BootstrapController,
+	solicitationCtrl *controller.SolicitationController,
+	bikkerCtrl *controller.BikkerController,
 	homeCtrl *infraCtrl.HomeController,
 	reviewCtrl *infraCtrl.ReviewController,
 	storageCtrl *infraCtrl.StorageController,
 	searchCtrl *infraCtrl.SearchController,
+	authMiddleware gin.HandlerFunc,
 ) *gin.Engine {
 	r := gin.Default()
 
@@ -32,9 +36,18 @@ func SetupRouter(
 	v1 := r.Group("/api/v1")
 	{
 		v1.GET("/health", healthCtrl.CheckHealth)
+		v1.GET("/bootstrap", bootstrapCtrl.GetBootstrap)
 
-		// Home Aggregated Route
+		// Home & Services Routes
 		v1.GET("/home", homeCtrl.GetHome)
+		v1.GET("/categories", homeCtrl.GetCategories)
+		v1.GET("/categories/:id", homeCtrl.GetCategoryByID)
+		v1.GET("/services", homeCtrl.GetServices)
+		v1.GET("/services/:id", homeCtrl.GetServiceByID)
+
+		// Bikker Profiles
+		v1.GET("/bikkers", bikkerCtrl.GetBikkers)
+		v1.GET("/bikkers/:id", bikkerCtrl.GetBikkerByID)
 
 		// Search Route (Returns Services + Categories)
 		v1.GET("/search", searchCtrl.Search)
@@ -46,14 +59,29 @@ func SetupRouter(
 			auth.POST("/login", authCtrl.Login)
 		}
 
-		v1.GET("/profile", profileCtrl.GetProfile)
-
-		// Reviews (Transactional rating cascade)
-		v1.POST("/reviews", reviewCtrl.CreateReview)
-
 		// Storage (Cloudflare R2 Pre-signed URLs)
 		v1.POST("/storage/upload-url", storageCtrl.GenerateUploadURL)
+
+		// Protected Routes (Require JWT)
+		protected := v1.Group("/")
+		if authMiddleware != nil {
+			protected.Use(authMiddleware)
+		}
+		{
+			protected.GET("/profile", profileCtrl.GetProfile)
+			protected.DELETE("/profile", profileCtrl.DeleteAccount)
+
+			// Solicitations Routes (Meus Pedidos & Acompanhamento)
+			protected.GET("/solicitations", solicitationCtrl.GetSolicitations)
+			protected.GET("/solicitations/:id", solicitationCtrl.GetSolicitationByID)
+			protected.POST("/solicitations", solicitationCtrl.CreateSolicitation)
+			protected.POST("/solicitations/:id/status", solicitationCtrl.UpdateStatus)
+
+			// Reviews (Transactional rating cascade)
+			protected.POST("/reviews", reviewCtrl.CreateReview)
+		}
 	}
 
 	return r
 }
+
