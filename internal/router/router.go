@@ -5,8 +5,10 @@ import (
 
 	"bikko-app/internal/controller"
 	infraCtrl "bikko-app/internal/infrastructure/http/controller"
+	"bikko-app/internal/infrastructure/http/middleware"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 )
 
 func SetupRouter(
@@ -23,6 +25,11 @@ func SetupRouter(
 	authMiddleware gin.HandlerFunc,
 ) *gin.Engine {
 	r := gin.Default()
+
+	// Initialize and apply IP Rate Limiter (5 requests per second, burst 10)
+	limiter := middleware.NewIPRateLimiter(rate.Limit(5), 10)
+	limiter.Cleanup()
+	r.Use(middleware.RateLimitMiddleware(limiter))
 
 	// Root Route
 	r.GET("/", func(c *gin.Context) {
