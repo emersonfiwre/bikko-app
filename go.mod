@@ -8,10 +8,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.3
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.2
 	github.com/gin-gonic/gin v1.9.1
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/mmcloughlin/geohash v0.10.0
 	github.com/redis/go-redis/v9 v9.6.1
+	golang.org/x/crypto v0.24.0
 )
 
 require (
@@ -54,7 +56,6 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	golang.org/x/arch v0.3.0 // indirect
-	golang.org/x/crypto v0.24.0 // indirect
 	golang.org/x/net v0.21.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect

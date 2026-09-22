@@ -40,9 +40,5 @@ type UserRepository interface {
 	CreateUser(ctx context.Context, user *User, password string) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByID(ctx context.Context, id string) (*User, error)
-}
-
-type BikkerRepository interface {
-	GetByID(ctx context.Context, id string) (*Bikker, error)
-	UpdateRatingAndReviews(ctx context.Context, bikkerID string, rating float64, totalReviews int) error
+	DeleteUser(ctx context.Context, id string) error
 }
