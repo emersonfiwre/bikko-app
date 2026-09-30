@@ -10,13 +10,25 @@ var (
 	ErrUnauthorized      = errors.New("usuário não autorizado")
 )
 
+type HomeCollection struct {
+	ID    string      `json:"id"`
+	Name  string      `json:"name"`
+	Type  string      `json:"type"`
+	Items interface{} `json:"items"`
+}
+
 type HomeResponse struct {
-	Categories   []Category `json:"categories"`
-	NearServices []Service  `json:"near_services"`
-	Advice       []Service  `json:"advice"`
+	Collections []HomeCollection `json:"collections"`
+}
+
+type SearchItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"title"`
+	Type        string `json:"type"`
+	ImageURL    string `json:"image_url"`
+	Description string `json:"subtitle"`
 }
 
 type SearchResponse struct {
-	Services   []Service  `json:"services"`
-	Categories []Category `json:"categories"`
+	Items []SearchItem `json:"items"`
 }

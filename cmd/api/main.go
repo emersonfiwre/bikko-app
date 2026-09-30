@@ -1,13 +1,19 @@
 package main
 
 import (
+	"context"
 	"log"
+
+	firebase "firebase.google.com/go/v4"
+	firebaseAuth "firebase.google.com/go/v4/auth"
 
 	"bikko-app/config"
 	"bikko-app/internal/controller"
 	"bikko-app/internal/infrastructure/cache"
 	infraCtrl "bikko-app/internal/infrastructure/http/controller"
+	"bikko-app/internal/infrastructure/http/middleware"
 	"bikko-app/internal/infrastructure/persistence/postgres"
+	"bikko-app/internal/infrastructure/security"
 	"bikko-app/internal/infrastructure/storage"
 	"bikko-app/internal/repository"
 	"bikko-app/internal/router"
@@ -42,16 +48,40 @@ func main() {
 	var categoryRepo = postgres.NewCategoryRepository(pgPool)
 	var serviceRepo = postgres.NewServiceRepository(pgPool)
 	var reviewRepo = postgres.NewReviewRepository(pgPool)
+	var bikkerRepo = postgres.NewBikkerRepository(pgPool)
+	var userRepo = postgres.NewUserRepository(pgPool)
 
-	// Legacy Mocks for Auth & Profile
-	authRepo := repository.NewMockAuthRepository()
-	profileRepo := repository.NewMockProfileRepository()
+	// Early instantiation for Solicitations (tracks active orders for Profile)
+	solicitationCtrl := controller.NewSolicitationController(serviceRepo)
+
+	// Legacy Mocks for Auth & Profile orders (mock orders still needed temporarily)
+	profileMockRepo := repository.NewMockProfileRepository(solicitationCtrl)
+
+	// Firebase Admin SDK
+	var fbAuth *firebaseAuth.Client
+	fbApp, err := firebase.NewApp(context.Background(), &firebase.Config{
+		ProjectID: cfg.FirebaseProjectID,
+	})
+	if err != nil {
+		log.Printf("Aviso: Não foi possível inicializar o Firebase App: %v\n", err)
+	} else {
+		fbAuth, err = fbApp.Auth(context.Background())
+		if err != nil {
+			log.Printf("Aviso: Não foi possível obter o Firebase Auth Client: %v\n", err)
+		} else {
+			log.Printf("Firebase Auth Client inicializado com sucesso.\n")
+		}
+	}
+
+	// Security
+	jwtService := security.NewJWTService(cfg.JWTSecret)
+	authMiddleware := middleware.AuthMiddleware(jwtService)
 
 	// 5. UseCases & Services
-	authSvc := service.NewAuthService(authRepo)
-	profileSvc := service.NewProfileService(profileRepo)
+	authSvc := service.NewAuthService(userRepo, jwtService, fbAuth)
+	profileSvc := service.NewProfileService(userRepo, profileMockRepo)
 
-	homeUC := usecase.NewHomeUseCase(categoryRepo, serviceRepo, redisSvc)
+	homeUC := usecase.NewHomeUseCase(categoryRepo, serviceRepo, bikkerRepo, redisSvc)
 	searchUC := usecase.NewSearchUseCase(categoryRepo, serviceRepo)
 	ratingUC := usecase.NewRatingUseCase(reviewRepo)
 	storageUC := usecase.NewStorageUseCase(storageSvc)
@@ -60,6 +90,8 @@ func main() {
 	healthCtrl := controller.NewHealthController()
 	authCtrl := controller.NewAuthController(authSvc)
 	profileCtrl := controller.NewProfileController(profileSvc)
+	bootstrapCtrl := controller.NewBootstrapController(redisSvc)
+	bikkerCtrl := controller.NewBikkerController(bikkerRepo)
 
 	homeCtrl := infraCtrl.NewHomeController(homeUC)
 	searchCtrl := infraCtrl.NewSearchController(searchUC)
@@ -67,10 +99,23 @@ func main() {
 	storageCtrl := infraCtrl.NewStorageController(storageUC)
 
 	// 7. Router
-	r := router.SetupRouter(healthCtrl, authCtrl, profileCtrl, homeCtrl, reviewCtrl, storageCtrl, searchCtrl)
+	r := router.SetupRouter(
+		healthCtrl,
+		authCtrl,
+		profileCtrl,
+		bootstrapCtrl,
+		solicitationCtrl,
+		bikkerCtrl,
+		homeCtrl,
+		reviewCtrl,
+		storageCtrl,
+		searchCtrl,
+		authMiddleware,
+	)
 
 	log.Printf("Servidor Golang rodando no ambiente [%s] na porta :%s\n", cfg.Env, cfg.Port)
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("Erro ao iniciar o servidor: %v", err)
 	}
 }
+
