@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
+
+	firebase "firebase.google.com/go/v4"
+	firebaseAuth "firebase.google.com/go/v4/auth"
 
 	"bikko-app/config"
 	"bikko-app/internal/controller"
@@ -53,12 +57,28 @@ func main() {
 	// Legacy Mocks for Auth & Profile orders (mock orders still needed temporarily)
 	profileMockRepo := repository.NewMockProfileRepository(solicitationCtrl)
 
+	// Firebase Admin SDK
+	var fbAuth *firebaseAuth.Client
+	fbApp, err := firebase.NewApp(context.Background(), &firebase.Config{
+		ProjectID: cfg.FirebaseProjectID,
+	})
+	if err != nil {
+		log.Printf("Aviso: Não foi possível inicializar o Firebase App: %v\n", err)
+	} else {
+		fbAuth, err = fbApp.Auth(context.Background())
+		if err != nil {
+			log.Printf("Aviso: Não foi possível obter o Firebase Auth Client: %v\n", err)
+		} else {
+			log.Printf("Firebase Auth Client inicializado com sucesso.\n")
+		}
+	}
+
 	// Security
 	jwtService := security.NewJWTService(cfg.JWTSecret)
 	authMiddleware := middleware.AuthMiddleware(jwtService)
 
 	// 5. UseCases & Services
-	authSvc := service.NewAuthService(userRepo, jwtService)
+	authSvc := service.NewAuthService(userRepo, jwtService, fbAuth)
 	profileSvc := service.NewProfileService(userRepo, profileMockRepo)
 
 	homeUC := usecase.NewHomeUseCase(categoryRepo, serviceRepo, bikkerRepo, redisSvc)

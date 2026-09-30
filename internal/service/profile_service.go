@@ -12,6 +12,7 @@ import (
 type ProfileService interface {
 	GetProfile(ctx context.Context, userID string) (*model.ProfileResponse, error)
 	DeleteAccount(ctx context.Context, userID string) error
+	UpdateProfile(ctx context.Context, userID, name, email, phone string) error
 }
 
 type profileService struct {
@@ -65,5 +66,12 @@ func (s *profileService) DeleteAccount(ctx context.Context, userID string) error
 		return fmt.Errorf("user id required")
 	}
 	return s.userRepo.DeleteUser(ctx, userID)
+}
+
+func (s *profileService) UpdateProfile(ctx context.Context, userID, name, email, phone string) error {
+	if userID == "" {
+		return fmt.Errorf("user id required")
+	}
+	return s.userRepo.UpdateUser(ctx, userID, name, email, phone)
 }
 

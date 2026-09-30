@@ -51,3 +51,33 @@ func (p *ProfileController) DeleteAccount(c *gin.Context) {
 	})
 }
 
+type UpdateProfileRequest struct {
+	Name  string `json:"name" binding:"required"`
+	Email string `json:"email" binding:"required,email"`
+	Phone string `json:"phone"`
+}
+
+func (p *ProfileController) UpdateProfile(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req UpdateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload: " + err.Error()})
+		return
+	}
+
+	if err := p.profileService.UpdateProfile(c.Request.Context(), userID, req.Name, req.Email, req.Phone); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "success",
+		"message": "Profile updated successfully",
+	})
+}
+

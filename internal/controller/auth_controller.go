@@ -27,7 +27,11 @@ func (a *AuthController) Register(c *gin.Context) {
 
 	resp, err := a.authService.Register(c.Request.Context(), req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    "REGISTRATION_FAILED",
+			"error":   err.Error(),
+			"message": err.Error(),
+		})
 		return
 	}
 
@@ -53,6 +57,20 @@ func (a *AuthController) Login(c *gin.Context) {
 			})
 			return
 		}
+		if errors.Is(err, service.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    "USER_NOT_FOUND",
+				"message": "Usuário não encontrado. Realize o cadastro.",
+			})
+			return
+		}
+		if errors.Is(err, service.ErrInvalidFirebaseToken) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    "INVALID_OTP",
+				"message": "Token ou código de verificação inválido ou expirado.",
+			})
+			return
+		}
 
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    "INVALID_CREDENTIALS",
@@ -62,4 +80,25 @@ func (a *AuthController) Login(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+type ForgotPasswordRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+func (ctrl *AuthController) ForgotPassword(c *gin.Context) {
+	var req ForgotPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	err := ctrl.authService.ForgotPassword(c.Request.Context(), req.Email)
+	if err != nil {
+		// Log the error but return 200 OK so we don't leak user existence
+		c.JSON(http.StatusOK, gin.H{"message": "If the email is registered, a recovery link has been sent."})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "If the email is registered, a recovery link has been sent."})
 }

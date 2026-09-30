@@ -39,6 +39,8 @@ type Bikker struct {
 type UserRepository interface {
 	CreateUser(ctx context.Context, user *User, password string) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
+	GetByPhone(ctx context.Context, phone string) (*User, error)
 	GetByID(ctx context.Context, id string) (*User, error)
+	UpdateUser(ctx context.Context, id string, name, email, phone string) error
 	DeleteUser(ctx context.Context, id string) error
 }

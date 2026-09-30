@@ -64,6 +64,7 @@ func SetupRouter(
 		{
 			auth.POST("/register", authCtrl.Register)
 			auth.POST("/login", authCtrl.Login)
+			auth.POST("/forgot-password", authCtrl.ForgotPassword)
 		}
 
 		// Storage (Cloudflare R2 Pre-signed URLs)
@@ -75,7 +76,9 @@ func SetupRouter(
 			protected.Use(authMiddleware)
 		}
 		{
+			// Profile Routes
 			protected.GET("/profile", profileCtrl.GetProfile)
+			protected.PUT("/profile", profileCtrl.UpdateProfile)
 			protected.DELETE("/profile", profileCtrl.DeleteAccount)
 
 			// Solicitations Routes (Meus Pedidos & Acompanhamento)

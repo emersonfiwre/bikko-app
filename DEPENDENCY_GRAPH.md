@@ -67,6 +67,7 @@
 | **Cache** | `cache` | `redis.go` | [redis.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/cache/redis.go) |
 | **Cloud Storage** | `storage` | `r2.go` | [r2.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/storage/r2.go) |
 | **Database Schema** | `migrations` | `000001_init_schema.up.sql` | [000001_init_schema.up.sql](file:///Users/emersontorres/projects/bikko-app/migrations/000001_init_schema.up.sql) |
+| **Unit Tests** | `testing` | `profile_repository_test.go`, `profile_service_test.go`, `profile_controller_test.go`, `home_usecase_test.go`, `home_controller_test.go`, `solicitation_controller_test.go`, `search_usecase_test.go`, `search_controller_test.go`, `category_test.go`, `home_test.go`, `quote_test.go`, `user_test.go`, `bikker_controller_test.go` | [profile_controller_test.go](file:///Users/emersontorres/projects/bikko-app/internal/controller/profile_controller_test.go) |
 
 ---
 

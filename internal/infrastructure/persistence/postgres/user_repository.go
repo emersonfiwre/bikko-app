@@ -84,6 +84,37 @@ func (r *userRepository) GetByEmail(ctx context.Context, email string) (*domain.
 	return user, nil
 }
 
+func (r *userRepository) GetByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	query := `
+		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), password_hash, rating, total_ratings, is_bikker, created_at, updated_at
+		FROM users
+		WHERE (phone = $1 OR phone = RIGHT($1, 11) OR RIGHT(phone, 11) = RIGHT($1, 11) OR phone = RIGHT($1, 9))
+		  AND deleted_at IS NULL
+		LIMIT 1
+	`
+
+	user := &domain.User{}
+	err := r.db.QueryRow(ctx, query, phone).Scan(
+		&user.ID,
+		&user.FullName,
+		&user.Email,
+		&user.Phone,
+		&user.CPF,
+		&user.PasswordHash,
+		&user.Rating,
+		&user.TotalRatings,
+		&user.IsBikker,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("user not found by phone: %w", err)
+	}
+
+	return user, nil
+}
+
 func (r *userRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	query := `
 		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), password_hash, rating, total_ratings, is_bikker, created_at, updated_at
@@ -111,6 +142,22 @@ func (r *userRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 	}
 
 	return user, nil
+}
+
+func (r *userRepository) UpdateUser(ctx context.Context, id string, name, email, phone string) error {
+	query := `
+		UPDATE users 
+		SET full_name = $1, email = $2, phone = NULLIF($3, ''), updated_at = NOW() 
+		WHERE id = $4 AND deleted_at IS NULL
+	`
+	tag, err := r.db.Exec(ctx, query, name, email, phone, id)
+	if err != nil {
+		return fmt.Errorf("failed to update user: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found or already deleted")
+	}
+	return nil
 }
 
 // Ensure the Delete functionality is added if not present in domain.UserRepository
