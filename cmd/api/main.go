@@ -13,6 +13,7 @@ import (
 	infraCtrl "bikko-app/internal/infrastructure/http/controller"
 	"bikko-app/internal/infrastructure/http/middleware"
 	"bikko-app/internal/infrastructure/persistence/postgres"
+	"bikko-app/internal/infrastructure/push"
 	"bikko-app/internal/infrastructure/security"
 	"bikko-app/internal/infrastructure/storage"
 	"bikko-app/internal/repository"
@@ -73,6 +74,10 @@ func main() {
 		}
 	}
 
+	// Push Notifications Service (Firebase Cloud Messaging)
+	pushSvc := push.NewFirebasePushService(fbApp, userRepo)
+	solicitationCtrl.SetPushService(pushSvc)
+
 	// Security
 	jwtService := security.NewJWTService(cfg.JWTSecret)
 	authMiddleware := middleware.AuthMiddleware(jwtService)
@@ -90,6 +95,7 @@ func main() {
 	healthCtrl := controller.NewHealthController()
 	authCtrl := controller.NewAuthController(authSvc)
 	profileCtrl := controller.NewProfileController(profileSvc)
+	userCtrl := controller.NewUserController(userRepo)
 	bootstrapCtrl := controller.NewBootstrapController(redisSvc)
 	bikkerCtrl := controller.NewBikkerController(bikkerRepo)
 
@@ -103,6 +109,7 @@ func main() {
 		healthCtrl,
 		authCtrl,
 		profileCtrl,
+		userCtrl,
 		bootstrapCtrl,
 		solicitationCtrl,
 		bikkerCtrl,

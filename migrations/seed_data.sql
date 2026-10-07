@@ -21,27 +21,27 @@ ON CONFLICT (id) DO UPDATE SET
   description = EXCLUDED.description;
 
 -- 2. Insert Users (Customers, Bikkers & Mock Reviewers)
-INSERT INTO users (id, full_name, email, phone, cpf, password_hash, is_bikker, rating, total_ratings, profile_photo_url) VALUES
+INSERT INTO users (id, full_name, email, phone, cpf, is_bikker, rating, total_ratings, profile_photo_url) VALUES
 -- Main Customer
-('11111111-0000-0000-0000-000000000099', 'João da Silva', 'joao.silva@exemplo.com', '(11) 98765-4321', '111.222.333-44', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 4.80, 12, 'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg'),
+('11111111-0000-0000-0000-000000000099', 'João da Silva', 'joao.silva@exemplo.com', '(11) 98765-4321', '111.222.333-44', false, 4.80, 12, 'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg'),
 -- Bikkers
-('11111111-0000-0000-0000-000000000001', 'Ricardo Almeida', 'ricardo.almeida@bikko.com.br', '(11) 99999-1001', '222.333.444-01', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.80, 105, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
-('11111111-0000-0000-0000-000000000002', 'Juliana Souza', 'juliana.souza@bikko.com.br', '(11) 99999-1002', '222.333.444-02', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.90, 85, 'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg'),
-('11111111-0000-0000-0000-000000000003', 'Pedro Pedreiro', 'pedro.pedreiro@bikko.com.br', '(11) 99999-1003', '222.333.444-03', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.90, 40, 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg'),
-('11111111-0000-0000-0000-000000000004', 'Marcos Pintor', 'marcos.pintor@bikko.com.br', '(11) 99999-1004', '222.333.444-04', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.80, 18, 'https://images.pexels.com/photos/614810/pexels-photo-614810.jpeg'),
-('11111111-0000-0000-0000-000000000005', 'Roberto Carreto', 'roberto.carreto@bikko.com.br', '(11) 99999-1005', '222.333.444-05', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.60, 15, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
-('11111111-0000-0000-0000-000000000006', 'Tiago Montador', 'tiago.montador@bikko.com.br', '(11) 99999-1006', '222.333.444-06', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.90, 22, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
-('11111111-0000-0000-0000-000000000007', 'Lucas Silva', 'lucas.ti@bikko.com.br', '(11) 99999-1007', '222.333.444-07', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.80, 12, 'https://images.pexels.com/photos/614810/pexels-photo-614810.jpeg'),
-('11111111-0000-0000-0000-000000000008', 'André Santos', 'andre.musica@bikko.com.br', '(11) 99999-1008', '222.333.444-08', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 5.00, 9, 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg'),
-('11111111-0000-0000-0000-000000000009', 'Carlos Mendes', 'carlos.mendes@bikko.com.br', '(11) 99999-1009', '222.333.444-09', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.90, 30, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
+('11111111-0000-0000-0000-000000000001', 'Ricardo Almeida', 'ricardo.almeida@bikko.com.br', '(11) 99999-1001', '222.333.444-01', true, 4.80, 105, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
+('11111111-0000-0000-0000-000000000002', 'Juliana Souza', 'juliana.souza@bikko.com.br', '(11) 99999-1002', '222.333.444-02', true, 4.90, 85, 'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg'),
+('11111111-0000-0000-0000-000000000003', 'Pedro Pedreiro', 'pedro.pedreiro@bikko.com.br', '(11) 99999-1003', '222.333.444-03', true, 4.90, 40, 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg'),
+('11111111-0000-0000-0000-000000000004', 'Marcos Pintor', 'marcos.pintor@bikko.com.br', '(11) 99999-1004', '222.333.444-04', true, 4.80, 18, 'https://images.pexels.com/photos/614810/pexels-photo-614810.jpeg'),
+('11111111-0000-0000-0000-000000000005', 'Roberto Carreto', 'roberto.carreto@bikko.com.br', '(11) 99999-1005', '222.333.444-05', true, 4.60, 15, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
+('11111111-0000-0000-0000-000000000006', 'Tiago Montador', 'tiago.montador@bikko.com.br', '(11) 99999-1006', '222.333.444-06', true, 4.90, 22, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
+('11111111-0000-0000-0000-000000000007', 'Lucas Silva', 'lucas.ti@bikko.com.br', '(11) 99999-1007', '222.333.444-07', true, 4.80, 12, 'https://images.pexels.com/photos/614810/pexels-photo-614810.jpeg'),
+('11111111-0000-0000-0000-000000000008', 'André Santos', 'andre.musica@bikko.com.br', '(11) 99999-1008', '222.333.444-08', true, 5.00, 9, 'https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg'),
+('11111111-0000-0000-0000-000000000009', 'Carlos Mendes', 'carlos.mendes@bikko.com.br', '(11) 99999-1009', '222.333.444-09', true, 4.90, 30, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
 -- Reviewer Clients from services.json
-('11111111-0000-0000-0000-000000000021', 'Fernanda Lima', 'fernanda.lima@exemplo.com', '(11) 98111-0021', '333.444.555-21', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 1, 'https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg'),
-('11111111-0000-0000-0000-000000000022', 'Rafael Almeida', 'rafael.almeida@exemplo.com', '(11) 98111-0022', '333.444.555-22', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 2, 'https://images.pexels.com/photos/614810/pexels-photo-614810.jpeg'),
-('11111111-0000-0000-0000-000000000023', 'Patrícia Martins', 'patricia.martins@exemplo.com', '(11) 98111-0023', '333.444.555-23', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 1, 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg'),
-('11111111-0000-0000-0000-000000000024', 'Lucas Ferreira', 'lucas.ferreira@exemplo.com', '(11) 98111-0024', '333.444.555-24', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 1, 'https://images.pexels.com/photos/1043474/pexels-photo-1043474.jpeg'),
-('11111111-0000-0000-0000-000000000025', 'Camila Rodrigues', 'camila.rodrigues@exemplo.com', '(11) 98111-0025', '333.444.555-25', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 2, 'https://images.pexels.com/photos/733872/pexels-photo-733872.jpeg'),
-('11111111-0000-0000-0000-000000000026', 'Maria Silva', 'maria.silva@exemplo.com', '(11) 98111-0026', '333.444.555-26', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 3, 'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg'),
-('11111111-0000-0000-0000-000000000027', 'Carlos Henrique', 'carlos.henrique@exemplo.com', '(11) 98111-0027', '333.444.555-27', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 3, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg')
+('11111111-0000-0000-0000-000000000021', 'Fernanda Lima', 'fernanda.lima@exemplo.com', '(11) 98111-0021', '333.444.555-21', false, 5.00, 1, 'https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg'),
+('11111111-0000-0000-0000-000000000022', 'Rafael Almeida', 'rafael.almeida@exemplo.com', '(11) 98111-0022', '333.444.555-22', false, 5.00, 2, 'https://images.pexels.com/photos/614810/pexels-photo-614810.jpeg'),
+('11111111-0000-0000-0000-000000000023', 'Patrícia Martins', 'patricia.martins@exemplo.com', '(11) 98111-0023', '333.444.555-23', false, 5.00, 1, 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg'),
+('11111111-0000-0000-0000-000000000024', 'Lucas Ferreira', 'lucas.ferreira@exemplo.com', '(11) 98111-0024', '333.444.555-24', false, 5.00, 1, 'https://images.pexels.com/photos/1043474/pexels-photo-1043474.jpeg'),
+('11111111-0000-0000-0000-000000000025', 'Camila Rodrigues', 'camila.rodrigues@exemplo.com', '(11) 98111-0025', '333.444.555-25', false, 5.00, 2, 'https://images.pexels.com/photos/733872/pexels-photo-733872.jpeg'),
+('11111111-0000-0000-0000-000000000026', 'Maria Silva', 'maria.silva@exemplo.com', '(11) 98111-0026', '333.444.555-26', false, 5.00, 3, 'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg'),
+('11111111-0000-0000-0000-000000000027', 'Carlos Henrique', 'carlos.henrique@exemplo.com', '(11) 98111-0027', '333.444.555-27', false, 5.00, 3, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg')
 ON CONFLICT (id) DO UPDATE SET
   full_name = EXCLUDED.full_name,
   email = EXCLUDED.email,

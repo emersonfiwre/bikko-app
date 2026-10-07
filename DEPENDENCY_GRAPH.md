@@ -17,8 +17,13 @@
 | `POST` | `/api/v1/auth/register`| `AuthController.Register` | `AuthService.Register` | `UserRepository` | `User` | `users` |
 | `POST` | `/api/v1/auth/login` | `AuthController.Login` | `AuthService.Login` | `UserRepository` | `User` | `users` |
 | `GET` | `/api/v1/profile` | `ProfileController.GetProfile` | `ProfileService.GetProfile` | `UserRepository` | `Profile` | `users` (JWT Protected) |
+| `PUT` | `/api/v1/profile` | `ProfileController.UpdateProfile` | `ProfileService.UpdateProfile` | `UserRepository` | `Profile` | `users` (JWT Protected) |
 | `DELETE` | `/api/v1/profile` | `ProfileController.DeleteAccount` | `ProfileService.DeleteAccount` | `UserRepository` | N/A | `users` (Soft Delete, JWT Protected) |
+| `POST` | `/api/v1/users/device-token` | `UserController.SaveDeviceToken` | `UserRepository.UpdateDeviceToken` | `UserRepository` | N/A | `users.device_token` (FCM Token, JWT Protected) |
+| `DELETE` | `/api/v1/users/device-token` | `UserController.DeleteDeviceToken` | `UserRepository.UpdateDeviceToken` | `UserRepository` | N/A | `users.device_token` (Remove FCM Token, JWT Protected) |
 | `POST` | `/api/v1/reviews` | `ReviewController.CreateReview`| `RatingUseCase.CreateReview` | `ReviewRepository.CreateReviewInTx` | `Review`, `Order`, `Service`, `Bikker` | `reviews`, `orders`, `services`, `bikkers` (Transactional Cascade) |
+| `POST` | `/api/v1/solicitations/:id/review` | `ReviewController.CreateSolicitationReview` | `RatingUseCase.CreateReview` | `ReviewRepository.CreateReviewInTx` | `Review`, `Order`, `Service`, `Bikker` | `reviews`, `orders`, `services`, `bikkers` (Transactional Cascade) |
+| `POST` | `/api/v1/orders/:id/review` | `ReviewController.CreateOrderReview` | `RatingUseCase.CreateReview` | `ReviewRepository.CreateReviewInTx` | `Review`, `Order`, `Service`, `Bikker` | `reviews`, `orders`, `services`, `bikkers` (Transactional Cascade) |
 | `POST` | `/api/v1/storage/upload-url` | `StorageController.GenerateUploadURL` | `StorageUseCase.GeneratePreSignedURL` | `StorageService` (Cloudflare R2) | N/A | Cloudflare R2 Bucket |
 | `GET` | `/api/v1/bootstrap` | `BootstrapController.GetBootstrap` | `RedisService.GetFeatures` | N/A | `BootstrapResponse` | Redis Key: `bikkofy:features` |
 | `GET` | `/api/v1/services/:id` | `ServiceController.GetServiceByID` | `ServiceUseCase.GetServiceByID` | `ServiceRepository` | `Service` | `services`, `categories`, `bikkers` |
@@ -61,13 +66,14 @@
 | **Entry Point** | `main` | `cmd/api/main.go` | [main.go](file:///Users/emersontorres/projects/bikko-app/cmd/api/main.go) |
 | **Config** | `config` | `config/config.go` | [config.go](file:///Users/emersontorres/projects/bikko-app/config/config.go) |
 | **Routing** | `router` | `internal/router/router.go` | [router.go](file:///Users/emersontorres/projects/bikko-app/internal/router/router.go) |
-| **HTTP Controller** | `controller` / `infraCtrl` | `home_controller.go`, `search_controller.go`, `review_controller.go`, `storage_controller.go`, `auth_controller.go` | [home_controller.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/http/controller/home_controller.go) |
-| **Business Logic** | `usecase` / `service` | `home_usecase.go`, `search_usecase.go`, `rating_usecase.go`, `storage_usecase.go`, `auth_service.go` | [home_usecase.go](file:///Users/emersontorres/projects/bikko-app/internal/usecase/home_usecase.go) |
-| **Persistence** | `postgres` | `client.go`, `service_repository.go`, `category_repository.go`, `review_repository.go` | [service_repository.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/persistence/postgres/service_repository.go) |
+| **HTTP Controller** | `controller` / `infraCtrl` | `home_controller.go`, `search_controller.go`, `review_controller.go`, `storage_controller.go`, `auth_controller.go`, `user_controller.go`, `solicitation_controller.go` | [user_controller.go](file:///Users/emersontorres/projects/bikko-app/internal/controller/user_controller.go) |
+| **Business Logic** | `usecase` / `service` | `home_usecase.go`, `search_usecase.go`, `rating_usecase.go`, `storage_usecase.go`, `auth_service.go`, `profile_service.go` | [home_usecase.go](file:///Users/emersontorres/projects/bikko-app/internal/usecase/home_usecase.go) |
+| **Push Notifications**| `push` | `firebase_push_service.go` | [firebase_push_service.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/push/firebase_push_service.go) |
+| **Persistence** | `postgres` | `client.go`, `service_repository.go`, `category_repository.go`, `review_repository.go`, `user_repository.go` | [user_repository.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/persistence/postgres/user_repository.go) |
 | **Cache** | `cache` | `redis.go` | [redis.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/cache/redis.go) |
 | **Cloud Storage** | `storage` | `r2.go` | [r2.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/storage/r2.go) |
-| **Database Schema** | `migrations` | `000001_init_schema.up.sql` | [000001_init_schema.up.sql](file:///Users/emersontorres/projects/bikko-app/migrations/000001_init_schema.up.sql) |
-| **Unit Tests** | `testing` | `profile_repository_test.go`, `profile_service_test.go`, `profile_controller_test.go`, `home_usecase_test.go`, `home_controller_test.go`, `solicitation_controller_test.go`, `search_usecase_test.go`, `search_controller_test.go`, `category_test.go`, `home_test.go`, `quote_test.go`, `user_test.go`, `bikker_controller_test.go` | [profile_controller_test.go](file:///Users/emersontorres/projects/bikko-app/internal/controller/profile_controller_test.go) |
+| **Database Schema** | `migrations` | `000001_init_schema.up.sql`, `000002_add_profile_edit_fields_to_users.up.sql`, `000003_add_device_token_to_users.up.sql` | [000003_add_device_token_to_users.up.sql](file:///Users/emersontorres/projects/bikko-app/migrations/000003_add_device_token_to_users.up.sql) |
+| **Unit Tests** | `testing` | `profile_repository_test.go`, `profile_service_test.go`, `profile_controller_test.go`, `home_usecase_test.go`, `home_controller_test.go`, `solicitation_controller_test.go`, `search_usecase_test.go`, `search_controller_test.go`, `category_test.go`, `home_test.go`, `quote_test.go`, `user_test.go`, `bikker_controller_test.go`, `storage_controller_test.go`, `user_controller_test.go`, `firebase_push_service_test.go` | [firebase_push_service_test.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/push/firebase_push_service_test.go) |
 
 ---
 
@@ -136,3 +142,24 @@ WHERE s.is_active = TRUE
 ORDER BY s.location_geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography ASC
 LIMIT $4;
 ```
+
+### 4. Push Notification Dispatch Workflow (Firebase Cloud Messaging)
+```mermaid
+graph TD
+    Client[User / Bikker App] -->|POST /solicitations/:id/status| SC[SolicitationController.UpdateStatus]
+    SC --> CheckEvent{Event Type?}
+    
+    CheckEvent -- Counter Offer --> CounterMsg[Title: 'Nova Contraproposta!'<br/>Body: 'Você recebeu uma nova oferta para a solicitação.']
+    CheckEvent -- Order Accepted --> AcceptedMsg[Title: 'Serviço Fechado!'<br/>Body: 'O serviço foi aceito e confirmado com sucesso.']
+    
+    CounterMsg --> ResolveOther[Resolve Other Party User ID]
+    AcceptedMsg --> ResolveOther
+    
+    ResolveOther --> PS[PushService.SendNotification]
+    PS --> DB[(users.device_token Query)]
+    DB --> HasToken{Token present?}
+    HasToken -- No --> Skip[Skip Push / Log warning]
+    HasToken -- Yes --> FCM[Firebase Admin SDK Messaging.Send]
+    FCM --> RecipientDevice[Target Mobile Device]
+```
+

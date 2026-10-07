@@ -15,12 +15,12 @@ func TestUserModel_JSONSerialization(t *testing.T) {
 		Email:                "emerson@bikko.com.br",
 		Phone:                "(11) 99999-9999",
 		CPF:                  "123.456.789-00",
-		PasswordHash:         "super_secret_hash_not_exposed",
 		ProfilePhotoURL:      "https://example.com/photo.jpg",
 		Rating:               4.9,
 		TotalRatings:         18,
 		IsBikker:             true,
 		NotificationsEnabled: true,
+		DeviceToken:          "fcm_token_123",
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
@@ -32,10 +32,7 @@ func TestUserModel_JSONSerialization(t *testing.T) {
 
 	jsonStr := string(data)
 
-	// PasswordHash must be omitted from JSON
-	if strings.Contains(jsonStr, "super_secret_hash_not_exposed") || strings.Contains(jsonStr, "password_hash") {
-		t.Errorf("PasswordHash must not be exposed in JSON, got: %s", jsonStr)
-	}
+	
 
 	if !strings.Contains(jsonStr, `"id":"usr_123"`) {
 		t.Errorf("expected id in JSON, got: %s", jsonStr)
@@ -43,18 +40,19 @@ func TestUserModel_JSONSerialization(t *testing.T) {
 	if !strings.Contains(jsonStr, `"full_name":"Emerson Torres"`) {
 		t.Errorf("expected full_name in JSON, got: %s", jsonStr)
 	}
+	if !strings.Contains(jsonStr, `"device_token":"fcm_token_123"`) {
+		t.Errorf("expected device_token in JSON, got: %s", jsonStr)
+	}
 
 	var unmarshaled User
 	if err := json.Unmarshal(data, &unmarshaled); err != nil {
 		t.Fatalf("failed to unmarshal User: %v", err)
 	}
 
-	if unmarshaled.ID != user.ID || unmarshaled.Email != user.Email || unmarshaled.Rating != user.Rating {
+	if unmarshaled.ID != user.ID || unmarshaled.Email != user.Email || unmarshaled.Rating != user.Rating || unmarshaled.DeviceToken != user.DeviceToken {
 		t.Errorf("unmarshaled user mismatch: %+v", unmarshaled)
 	}
-	if unmarshaled.PasswordHash != "" {
-		t.Errorf("unmarshaled PasswordHash should be empty, got: %s", unmarshaled.PasswordHash)
-	}
+	
 }
 
 func TestBikkerModel_JSONSerialization(t *testing.T) {

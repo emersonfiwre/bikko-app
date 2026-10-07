@@ -2,6 +2,8 @@ package model
 
 type SolicitationItem struct {
 	ID                  string   `json:"id"`
+	ClientID            string   `json:"client_id,omitempty"`
+	ProviderID          string   `json:"provider_id,omitempty"`
 	ServiceID           string   `json:"service_id"`
 	ServiceName         string   `json:"service_name"`
 	ProviderName        string   `json:"provider_name"`

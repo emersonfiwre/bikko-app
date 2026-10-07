@@ -15,6 +15,7 @@ func SetupRouter(
 	healthCtrl *controller.HealthController,
 	authCtrl *controller.AuthController,
 	profileCtrl *controller.ProfileController,
+	userCtrl *controller.UserController,
 	bootstrapCtrl *controller.BootstrapController,
 	solicitationCtrl *controller.SolicitationController,
 	bikkerCtrl *controller.BikkerController,
@@ -64,7 +65,7 @@ func SetupRouter(
 		{
 			auth.POST("/register", authCtrl.Register)
 			auth.POST("/login", authCtrl.Login)
-			auth.POST("/forgot-password", authCtrl.ForgotPassword)
+			
 		}
 
 		// Storage (Cloudflare R2 Pre-signed URLs)
@@ -81,11 +82,19 @@ func SetupRouter(
 			protected.PUT("/profile", profileCtrl.UpdateProfile)
 			protected.DELETE("/profile", profileCtrl.DeleteAccount)
 
+			// User Device Token Routes
+			protected.POST("/users/device-token", userCtrl.SaveDeviceToken)
+			protected.DELETE("/users/device-token", userCtrl.DeleteDeviceToken)
+
 			// Solicitations Routes (Meus Pedidos & Acompanhamento)
 			protected.GET("/solicitations", solicitationCtrl.GetSolicitations)
 			protected.GET("/solicitations/:id", solicitationCtrl.GetSolicitationByID)
 			protected.POST("/solicitations", solicitationCtrl.CreateSolicitation)
 			protected.POST("/solicitations/:id/status", solicitationCtrl.UpdateStatus)
+			protected.POST("/solicitations/:id/review", reviewCtrl.CreateSolicitationReview)
+
+			// Orders Routes
+			protected.POST("/orders/:id/review", reviewCtrl.CreateOrderReview)
 
 			// Reviews (Transactional rating cascade)
 			protected.POST("/reviews", reviewCtrl.CreateReview)

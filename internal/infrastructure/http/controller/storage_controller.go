@@ -19,11 +19,11 @@ func NewStorageController(storageUC *usecase.StorageUseCase) *StorageController 
 func (ctrl *StorageController) GenerateUploadURL(c *gin.Context) {
 	var req usecase.UploadURLRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "os campos 'folder' e 'content_type' são obrigatórios"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "corpo da requisição inválido"})
 		return
 	}
 
-	res, err := ctrl.storageUC.GenerateUploadURL(c.Request.Context(), req.Folder, req.ContentType)
+	res, err := ctrl.storageUC.GenerateUploadURL(c.Request.Context(), req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

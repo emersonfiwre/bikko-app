@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"bikko-app/internal/domain"
@@ -387,6 +388,153 @@ func TestSolicitationController_GetActiveSolicitations(t *testing.T) {
 		limitedActives := ctrl.GetActiveSolicitations()
 		if len(limitedActives) != 3 {
 			t.Errorf("expected exactly 3 items due to limit, got %d", len(limitedActives))
+		}
+	})
+}
+
+type fakePushNotificationCall struct {
+	userID string
+	title  string
+	body   string
+	data   map[string]string
+}
+
+type fakePushServiceForTest struct {
+	mu    sync.Mutex
+	calls []fakePushNotificationCall
+}
+
+func (f *fakePushServiceForTest) SendNotification(ctx context.Context, userID string, title, body string, data map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakePushNotificationCall{
+		userID: userID,
+		title:  title,
+		body:   body,
+		data:   data,
+	})
+	return nil
+}
+
+func TestSolicitationController_PushNotifications(t *testing.T) {
+	t.Run("sends push to provider when client sends counter-offer", func(t *testing.T) {
+		fakePush := &fakePushServiceForTest{}
+		ctrl := NewSolicitationController(nil, fakePush)
+		router := setupSolicitationRouter(ctrl)
+
+		price := 320.0
+		senderRole := "CLIENT"
+		payload := map[string]interface{}{
+			"status":              "NEGOTIATING",
+			"counter_offer_price": price,
+			"sender_role":         senderRole,
+		}
+		data, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, "/solicitations/sol_1/status", bytes.NewBuffer(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", w.Code)
+		}
+
+		if len(fakePush.calls) != 1 {
+			t.Fatalf("expected 1 push notification call, got %d", len(fakePush.calls))
+		}
+
+		call := fakePush.calls[0]
+		// sol_1 provider is 11111111-0000-0000-0000-000000000009
+		if call.userID != "11111111-0000-0000-0000-000000000009" {
+			t.Errorf("expected provider ID recipient, got %s", call.userID)
+		}
+		if call.title != "Nova Contraproposta!" {
+			t.Errorf("expected title 'Nova Contraproposta!', got '%s'", call.title)
+		}
+		if call.body != "Você recebeu uma nova oferta para a solicitação." {
+			t.Errorf("expected body 'Você recebeu uma nova oferta para a solicitação.', got '%s'", call.body)
+		}
+		if call.data["solicitation_id"] != "sol_1" || call.data["type"] != "counter_offer" {
+			t.Errorf("unexpected data payload: %+v", call.data)
+		}
+	})
+
+	t.Run("sends push to client when provider sends counter-offer", func(t *testing.T) {
+		fakePush := &fakePushServiceForTest{}
+		ctrl := NewSolicitationController(nil)
+		ctrl.SetPushService(fakePush)
+		router := setupSolicitationRouter(ctrl)
+
+		price := 380.0
+		senderRole := "PROVIDER"
+		payload := map[string]interface{}{
+			"status":              "NEGOTIATING",
+			"counter_offer_price": price,
+			"sender_role":         senderRole,
+		}
+		data, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, "/solicitations/sol_1/status", bytes.NewBuffer(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", w.Code)
+		}
+
+		if len(fakePush.calls) != 1 {
+			t.Fatalf("expected 1 push notification call, got %d", len(fakePush.calls))
+		}
+
+		call := fakePush.calls[0]
+		// sol_1 client is 11111111-0000-0000-0000-000000000099
+		if call.userID != "11111111-0000-0000-0000-000000000099" {
+			t.Errorf("expected client ID recipient, got %s", call.userID)
+		}
+		if call.title != "Nova Contraproposta!" {
+			t.Errorf("expected title 'Nova Contraproposta!', got '%s'", call.title)
+		}
+		if call.data["solicitation_id"] != "sol_1" || call.data["type"] != "counter_offer" {
+			t.Errorf("unexpected data payload: %+v", call.data)
+		}
+	})
+
+	t.Run("sends push when order is ACCEPTED", func(t *testing.T) {
+		fakePush := &fakePushServiceForTest{}
+		ctrl := NewSolicitationController(nil, fakePush)
+		router := setupSolicitationRouter(ctrl)
+
+		senderRole := "CLIENT"
+		payload := map[string]interface{}{
+			"status":      "ACCEPTED",
+			"sender_role": senderRole,
+		}
+		data, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, "/solicitations/sol_1/status", bytes.NewBuffer(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", w.Code)
+		}
+
+		if len(fakePush.calls) != 1 {
+			t.Fatalf("expected 1 push notification call, got %d", len(fakePush.calls))
+		}
+
+		call := fakePush.calls[0]
+		if call.userID != "11111111-0000-0000-0000-000000000009" {
+			t.Errorf("expected provider recipient, got %s", call.userID)
+		}
+		if call.title != "Serviço Fechado!" {
+			t.Errorf("expected title 'Serviço Fechado!', got '%s'", call.title)
+		}
+		if call.data["solicitation_id"] != "sol_1" || call.data["type"] != "accepted" {
+			t.Errorf("unexpected data payload: %+v", call.data)
 		}
 	})
 }

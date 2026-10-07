@@ -82,23 +82,5 @@ func (a *AuthController) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-type ForgotPasswordRequest struct {
-	Email string `json:"email" binding:"required,email"`
-}
 
-func (ctrl *AuthController) ForgotPassword(c *gin.Context) {
-	var req ForgotPasswordRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
 
-	err := ctrl.authService.ForgotPassword(c.Request.Context(), req.Email)
-	if err != nil {
-		// Log the error but return 200 OK so we don't leak user existence
-		c.JSON(http.StatusOK, gin.H{"message": "If the email is registered, a recovery link has been sent."})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "If the email is registered, a recovery link has been sent."})
-}

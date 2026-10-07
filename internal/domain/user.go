@@ -11,12 +11,12 @@ type User struct {
 	Email                string    `json:"email"`
 	Phone                string    `json:"phone,omitempty"`
 	CPF                  string    `json:"cpf,omitempty"`
-	PasswordHash         string    `json:"-"`
 	ProfilePhotoURL      string    `json:"profile_photo_url,omitempty"`
 	Rating               float64   `json:"rating"`
 	TotalRatings         int       `json:"total_ratings"`
 	IsBikker             bool      `json:"is_bikker"`
 	NotificationsEnabled bool      `json:"notifications_enabled"`
+	DeviceToken          string    `json:"device_token,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
@@ -37,10 +37,12 @@ type Bikker struct {
 }
 
 type UserRepository interface {
-	CreateUser(ctx context.Context, user *User, password string) (*User, error)
+	CreateUser(ctx context.Context, user *User) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByPhone(ctx context.Context, phone string) (*User, error)
 	GetByID(ctx context.Context, id string) (*User, error)
 	UpdateUser(ctx context.Context, id string, name, email, phone string) error
 	DeleteUser(ctx context.Context, id string) error
+	UpdateDeviceToken(ctx context.Context, id string, token *string) error
+	GetDeviceToken(ctx context.Context, id string) (string, error)
 }

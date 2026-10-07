@@ -23,7 +23,6 @@ var (
 type AuthService interface {
 	Register(ctx context.Context, req model.RegisterRequest) (*model.AuthResponse, error)
 	Login(ctx context.Context, req model.LoginRequest) (*model.AuthResponse, error)
-	ForgotPassword(ctx context.Context, email string) error
 	VerifyIDToken(ctx context.Context, idToken string) (*firebaseAuth.Token, error)
 }
 
@@ -51,7 +50,7 @@ func (s *authService) VerifyIDToken(ctx context.Context, idToken string) (*fireb
 		return &firebaseAuth.Token{
 			UID: "mock_firebase_uid",
 			Claims: map[string]interface{}{
-				"phone_number": "+5511999999999",
+				
 			},
 		}, nil
 	}
@@ -81,18 +80,6 @@ func (s *authService) Register(ctx context.Context, req model.RegisterRequest) (
 		}
 	}
 
-	var hashedPassword string
-	if req.Password != "" {
-		var err error
-		hashedPassword, err = security.HashPassword(req.Password)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// Secure default password hash for phone auth users
-		hashedPassword = "$2a$10$BikkoPhoneAuthVerifiedUserPlaceholderHash"
-	}
-
 	user := &domain.User{
 		FullName: name,
 		Email:    req.Email,
@@ -100,7 +87,7 @@ func (s *authService) Register(ctx context.Context, req model.RegisterRequest) (
 		CPF:      req.CPF,
 	}
 
-	createdUser, err := s.repo.CreateUser(ctx, user, hashedPassword)
+	createdUser, err := s.repo.CreateUser(ctx, user)
 	if err != nil {
 		return nil, err
 	}
@@ -161,40 +148,5 @@ func (s *authService) Login(ctx context.Context, req model.LoginRequest) (*model
 		}, nil
 	}
 
-	// Fallback to Email / Password login
-	user, err := s.repo.GetByEmail(ctx, req.Email)
-	if err != nil {
-		return nil, ErrInvalidCredentials
-	}
-
-	if !security.CheckPasswordHash(req.Password, user.PasswordHash) {
-		return nil, ErrInvalidCredentials
-	}
-
-	token, err := s.jwtService.GenerateToken(user.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	return &model.AuthResponse{
-		Message: "Login realizado com sucesso",
-		Token:   token,
-		User: model.User{
-			ID:    user.ID,
-			Name:  user.FullName,
-			Email: user.Email,
-			Phone: user.Phone,
-		},
-	}, nil
-}
-
-func (s *authService) ForgotPassword(ctx context.Context, email string) error {
-	user, err := s.repo.GetByEmail(ctx, email)
-	if err != nil {
-		// Do not return error, simulate success for security
-		return nil
-	}
-
-	_ = user
-	return nil
+	return nil, ErrInvalidCredentials
 }

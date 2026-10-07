@@ -21,7 +21,7 @@ type fakeUserRepository struct {
 	lastDeletedID string
 }
 
-func (f *fakeUserRepository) CreateUser(ctx context.Context, user *domain.User, password string) (*domain.User, error) {
+func (f *fakeUserRepository) CreateUser(ctx context.Context, user *domain.User) (*domain.User, error) {
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -80,6 +80,24 @@ func (f *fakeUserRepository) DeleteUser(ctx context.Context, id string) error {
 	}
 	delete(f.users, id)
 	return nil
+}
+
+func (f *fakeUserRepository) UpdateDeviceToken(ctx context.Context, id string, token *string) error {
+	if u, ok := f.users[id]; ok {
+		if token != nil {
+			u.DeviceToken = *token
+		} else {
+			u.DeviceToken = ""
+		}
+	}
+	return nil
+}
+
+func (f *fakeUserRepository) GetDeviceToken(ctx context.Context, id string) (string, error) {
+	if u, ok := f.users[id]; ok {
+		return u.DeviceToken, nil
+	}
+	return "", errors.New("user not found")
 }
 
 type fakeProfileRepo struct {

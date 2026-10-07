@@ -35,8 +35,8 @@ func TestHomeDomain_JSONSerialization(t *testing.T) {
 					ID:   "cat_col",
 					Name: "Categorias",
 					Type: "Category",
-					Items: []Category{
-						{ID: "c1", Name: "Pintura"},
+					Items: []HomeItem{
+						{ID: "c1", Title: "Pintura"},
 					},
 				},
 			},

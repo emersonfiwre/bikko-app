@@ -2,11 +2,15 @@ package controller
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"bikko-app/internal/domain"
+	"bikko-app/internal/infrastructure/http/middleware"
+	"bikko-app/internal/infrastructure/push"
 	"bikko-app/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -16,17 +20,26 @@ type SolicitationController struct {
 	mu            sync.RWMutex
 	solicitations []model.SolicitationItem
 	serviceRepo   domain.ServiceRepository
+	pushService   push.PushService
 }
 
-func NewSolicitationController(serviceRepo domain.ServiceRepository) *SolicitationController {
+func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService ...push.PushService) *SolicitationController {
 	reason := "O provedor não tinha disponibilidade para a data/hora solicitada."
 	cancelledByProvider := "PROVIDER"
 
+	var ps push.PushService
+	if len(pushService) > 0 {
+		ps = pushService[0]
+	}
+
 	return &SolicitationController{
 		serviceRepo: serviceRepo,
+		pushService: ps,
 		solicitations: []model.SolicitationItem{
 			{
 				ID:               "sol_1",
+				ClientID:         "11111111-0000-0000-0000-000000000099",
+				ProviderID:       "11111111-0000-0000-0000-000000000009",
 				ServiceID:        "22222222-0000-0000-0000-000000000012",
 				ServiceName:      "Instalação de Ar Condicionado",
 				ProviderName:     "Carlos Mendes",
@@ -44,6 +57,8 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository) *Solicitati
 			},
 			{
 				ID:               "sol_2",
+				ClientID:         "11111111-0000-0000-0000-000000000099",
+				ProviderID:       "11111111-0000-0000-0000-000000000002",
 				ServiceID:        "22222222-0000-0000-0000-000000000002",
 				ServiceName:      "Pintura de Quarto",
 				ProviderName:     "Marcos Souza",
@@ -59,6 +74,8 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository) *Solicitati
 			},
 			{
 				ID:                 "sol_3",
+				ClientID:           "11111111-0000-0000-0000-000000000099",
+				ProviderID:         "11111111-0000-0000-0000-000000000003",
 				ServiceID:          "22222222-0000-0000-0000-000000000003",
 				ServiceName:        "Reparo de Disjuntor",
 				ProviderName:       "Carlos Silva",
@@ -76,6 +93,8 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository) *Solicitati
 			},
 			{
 				ID:               "sol_4",
+				ClientID:         "11111111-0000-0000-0000-000000000099",
+				ProviderID:       "11111111-0000-0000-0000-000000000004",
 				ServiceID:        "22222222-0000-0000-0000-000000000008",
 				ServiceName:      "Limpeza Residencial",
 				ProviderName:     "Juliana Souza",
@@ -91,6 +110,12 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository) *Solicitati
 			},
 		},
 	}
+}
+
+func (ctrl *SolicitationController) SetPushService(ps push.PushService) {
+	ctrl.mu.Lock()
+	defer ctrl.mu.Unlock()
+	ctrl.pushService = ps
 }
 
 func (ctrl *SolicitationController) GetSolicitations(c *gin.Context) {
@@ -136,12 +161,16 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 	providerTitle := "Especialista Residencial"
 	providerRating := "4.9"
 	providerPhotoURL := "https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg"
+	providerID := "11111111-0000-0000-0000-000000000009"
 
 	if req.ServiceName == "" && req.ServiceID != "" {
 		if ctrl.serviceRepo != nil {
 			service, err := ctrl.serviceRepo.GetServiceByID(c.Request.Context(), req.ServiceID)
 			if err == nil && service != nil {
 				name = service.Name
+				if service.BikkerID != "" {
+					providerID = service.BikkerID
+				}
 				if service.ProviderName != "" {
 					providerName = service.ProviderName
 				}
@@ -173,8 +202,15 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 	}
 
 	dateStr := time.Now().Format("02/01/2006")
+	clientID := middleware.GetUserID(c)
+	if clientID == "" {
+		clientID = "11111111-0000-0000-0000-000000000099"
+	}
+
 	newSol := model.SolicitationItem{
 		ID:                 fmt.Sprintf("sol_%d", time.Now().Unix()),
+		ClientID:           clientID,
+		ProviderID:         providerID,
 		ServiceID:          serviceID,
 		ServiceName:        name,
 		ProviderName:       providerName,
@@ -205,6 +241,8 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 		CancelledBy         *string  `json:"cancelled_by"`
 		CounterOfferPrice   *float64 `json:"counter_offer_price"`
 		CounterOfferMessage *string  `json:"counter_offer_message"`
+		SenderRole          *string  `json:"sender_role"`
+		SenderID            *string  `json:"sender_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -238,6 +276,62 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 			if req.CounterOfferMessage != nil {
 				ctrl.solicitations[i].CounterOfferMessage = req.CounterOfferMessage
 			}
+
+			// Determine recipient for push notifications
+			var targetUserID string
+			currentUserID := middleware.GetUserID(c)
+			if req.SenderID != nil && *req.SenderID != "" {
+				currentUserID = *req.SenderID
+			}
+
+			if req.SenderRole != nil && strings.EqualFold(*req.SenderRole, "PROVIDER") {
+				targetUserID = s.ClientID
+			} else if req.SenderRole != nil && strings.EqualFold(*req.SenderRole, "CLIENT") {
+				targetUserID = s.ProviderID
+			} else if currentUserID != "" && currentUserID == s.ProviderID {
+				targetUserID = s.ClientID
+			} else if currentUserID != "" && currentUserID == s.ClientID {
+				targetUserID = s.ProviderID
+			} else {
+				if s.ProviderID != "" {
+					targetUserID = s.ProviderID
+				} else {
+					targetUserID = s.ClientID
+				}
+			}
+
+			// Send Push Notification on Counter Offer
+			if req.CounterOfferPrice != nil && ctrl.pushService != nil && targetUserID != "" {
+				pushData := map[string]string{
+					"solicitation_id": s.ID,
+					"type":            "counter_offer",
+				}
+				if err := ctrl.pushService.SendNotification(
+					c.Request.Context(),
+					targetUserID,
+					"Nova Contraproposta!",
+					"Você recebeu uma nova oferta para a solicitação.",
+					pushData,
+				); err != nil {
+					log.Printf("[SolicitationController] Failed to send counter offer push notification: %v\n", err)
+				}
+			} else if req.Status == "ACCEPTED" && ctrl.pushService != nil && targetUserID != "" {
+				// Send Push Notification on Accepted Order
+				pushData := map[string]string{
+					"solicitation_id": s.ID,
+					"type":            "accepted",
+				}
+				if err := ctrl.pushService.SendNotification(
+					c.Request.Context(),
+					targetUserID,
+					"Serviço Fechado!",
+					"O serviço foi aceito e confirmado com sucesso.",
+					pushData,
+				); err != nil {
+					log.Printf("[SolicitationController] Failed to send accepted push notification: %v\n", err)
+				}
+			}
+
 			c.JSON(http.StatusOK, ctrl.solicitations[i])
 			return
 		}

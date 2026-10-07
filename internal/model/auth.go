@@ -4,7 +4,6 @@ type LoginRequest struct {
 	IDToken  string `json:"id_token"`
 	Phone    string `json:"phone"`
 	Email    string `json:"email"`
-	Password string `json:"password"`
 }
 
 type RegisterRequest struct {
@@ -12,7 +11,6 @@ type RegisterRequest struct {
 	Name     string `json:"name"`
 	FullName string `json:"full_name"`
 	Email    string `json:"email"`
-	Password string `json:"password"`
 	Phone    string `json:"phone"`
 	CPF      string `json:"cpf"`
 }
