@@ -120,7 +120,7 @@ func main() {
 		authMiddleware,
 	)
 
-	log.Printf("Servidor Golang rodando no ambiente [%s] na porta :%s\n", cfg.Env, cfg.Port)
+	log.Printf("Bikkofy API rodando no ambiente [%s] na porta :%s\n", cfg.Env, cfg.Port)
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("Erro ao iniciar o servidor: %v", err)
 	}

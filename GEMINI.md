@@ -47,3 +47,12 @@ The backend serves the "Uber for handymen" mobile apps (Bikko client and Bikker 
 
 ## Current Goal
 Maintaining and expanding Clean Architecture REST endpoints, supporting real-time PostGIS proximity filtering, dynamic home collections, and multi-app scalability.
+
+## Architecture Context: Modular Monolith
+The backend now serves both the Bikkofy (Client) and Bikkerfy (Provider) platforms as a Modular Monolith.
+Shared domain logic, entities, and database integrations (Postgres, Firebase, Cloudflare R2) are kept in the `internal/` folder.
+The entrypoints have been separated into:
+- `cmd/bikkofy-api/main.go` for the Client App routes
+- `cmd/bikkerfy-api/main.go` for the Provider App routes
+
+Both entrypoints can be compiled independently using `go build ./cmd/...`.
