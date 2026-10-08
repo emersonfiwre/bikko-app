@@ -1,15 +1,18 @@
 package model
 
 type LoginRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required"`
+	IDToken  string `json:"id_token"`
+	Phone    string `json:"phone"`
+	Email    string `json:"email"`
 }
 
 type RegisterRequest struct {
-	Name     string `json:"name" binding:"required"`
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required"`
+	IDToken  string `json:"id_token"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Email    string `json:"email"`
 	Phone    string `json:"phone"`
+	CPF      string `json:"cpf"`
 }
 
 type User struct {

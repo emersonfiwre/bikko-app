@@ -24,6 +24,9 @@ func (r *mockAuthRepository) CreateUser(ctx context.Context, user *model.User, p
 }
 
 func (r *mockAuthRepository) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
+	if email == "unconfirmed@bikko.com.br" {
+		return nil, errors.New("unconfirmed_email")
+	}
 	if email == "error@bikko.com.br" {
 		return nil, errors.New("usuário não encontrado")
 	}

@@ -9,6 +9,8 @@ type Config struct {
 	Port string
 	Env  string
 
+	JWTSecret string
+
 	// Postgres DB Config
 	DBHost     string
 	DBPort     string
@@ -28,12 +30,18 @@ type Config struct {
 	R2SecretKey  string
 	R2BucketName string
 	R2PublicURL  string
+
+	// Firebase Config
+	FirebaseProjectID       string
+	FirebaseCredentialsFile string
 }
 
 func LoadConfig() *Config {
 	return &Config{
 		Port: getEnv("PORT", "8080"),
 		Env:  getEnv("ENV", "development"),
+
+		JWTSecret: getEnv("JWT_SECRET", "super-secret-key-bikko-dev"),
 
 		DBHost:     getEnv("DB_HOST", "localhost"),
 		DBPort:     getEnv("DB_PORT", "5432"),
@@ -50,6 +58,9 @@ func LoadConfig() *Config {
 		R2SecretKey:  getEnv("R2_SECRET_ACCESS_KEY", "mock_r2_secret_key"),
 		R2BucketName: getEnv("R2_BUCKET_NAME", "bikko-media"),
 		R2PublicURL:  getEnv("R2_PUBLIC_URL", "https://pub-bikko.r2.dev"),
+
+		FirebaseProjectID:       getEnv("FIREBASE_PROJECT_ID", "dummy-project"),
+		FirebaseCredentialsFile: getEnv("FIREBASE_CREDENTIALS_FILE", ""),
 	}
 }
 
@@ -68,3 +79,4 @@ func getEnv(key, fallback string) string {
 	}
 	return fallback
 }
+

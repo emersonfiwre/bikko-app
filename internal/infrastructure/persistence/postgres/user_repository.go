@@ -1,0 +1,217 @@
+package postgres
+
+import (
+	"context"
+	"fmt"
+
+	"bikko-app/internal/domain"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type userRepository struct {
+	db *pgxpool.Pool
+}
+
+func NewUserRepository(db *pgxpool.Pool) domain.UserRepository {
+	return &userRepository{db: db}
+}
+
+func (r *userRepository) CreateUser(ctx context.Context, user *domain.User) (*domain.User, error) {
+					
+	query := `
+		INSERT INTO users (full_name, email, phone, cpf)
+		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), $5)
+		RETURNING id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), rating, total_ratings, is_bikker, created_at, updated_at
+	`
+	
+	err := r.db.QueryRow(ctx, query,
+		user.FullName,
+		user.Email,
+		user.Phone,
+		user.CPF,
+	).Scan(
+		&user.ID,
+		&user.FullName,
+		&user.Email,
+		&user.Phone,
+		&user.CPF,
+		&user.Rating,
+		&user.TotalRatings,
+		&user.IsBikker,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+
+	return user, nil
+}
+
+func (r *userRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
+	query := `
+		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), rating, total_ratings, is_bikker, COALESCE(device_token, ''), created_at, updated_at
+		FROM users
+		WHERE email = $1 AND deleted_at IS NULL
+	`
+
+	user := &domain.User{}
+	err := r.db.QueryRow(ctx, query, email).Scan(
+		&user.ID,
+		&user.FullName,
+		&user.Email,
+		&user.Phone,
+		&user.CPF,
+		&user.Rating,
+		&user.TotalRatings,
+		&user.IsBikker,
+		&user.DeviceToken,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("user not found or error: %w", err)
+	}
+
+	return user, nil
+}
+
+func (r *userRepository) GetByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	query := `
+		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), rating, total_ratings, is_bikker, COALESCE(device_token, ''), created_at, updated_at
+		FROM users
+		WHERE (phone = $1 OR phone = RIGHT($1, 11) OR RIGHT(phone, 11) = RIGHT($1, 11) OR phone = RIGHT($1, 9))
+		  AND deleted_at IS NULL
+		LIMIT 1
+	`
+
+	user := &domain.User{}
+	err := r.db.QueryRow(ctx, query, phone).Scan(
+		&user.ID,
+		&user.FullName,
+		&user.Email,
+		&user.Phone,
+		&user.CPF,
+		&user.Rating,
+		&user.TotalRatings,
+		&user.IsBikker,
+		&user.DeviceToken,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("user not found by phone: %w", err)
+	}
+
+	return user, nil
+}
+
+func (r *userRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	query := `
+		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), rating, total_ratings, is_bikker, COALESCE(device_token, ''), created_at, updated_at
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+
+	user := &domain.User{}
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&user.ID,
+		&user.FullName,
+		&user.Email,
+		&user.Phone,
+		&user.CPF,
+		&user.Rating,
+		&user.TotalRatings,
+		&user.IsBikker,
+		&user.DeviceToken,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("user not found or error: %w", err)
+	}
+
+	return user, nil
+}
+
+func (r *userRepository) UpdateUser(ctx context.Context, id string, name, email, phone string) error {
+	query := `
+		UPDATE users 
+		SET full_name = $1, email = $2, phone = NULLIF($3, ''), updated_at = NOW() 
+		WHERE id = $4 AND deleted_at IS NULL
+	`
+	tag, err := r.db.Exec(ctx, query, name, email, phone, id)
+	if err != nil {
+		return fmt.Errorf("failed to update user: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found or already deleted")
+	}
+	return nil
+}
+
+// Ensure the Delete functionality is added if not present in domain.UserRepository
+// I will implement DeleteAccount for the soft delete support later when we see the profile_service.
+func (r *userRepository) DeleteUser(ctx context.Context, id string) error {
+	query := `
+		UPDATE users 
+		SET deleted_at = NOW() 
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	tag, err := r.db.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to soft delete user: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found or already deleted")
+	}
+	return nil
+}
+
+func (r *userRepository) UpdateDeviceToken(ctx context.Context, id string, token *string) error {
+	var query string
+	var args []interface{}
+
+	if token != nil && *token != "" {
+		query = `
+			UPDATE users 
+			SET device_token = $1, updated_at = NOW() 
+			WHERE id = $2 AND deleted_at IS NULL
+		`
+		args = []interface{}{*token, id}
+	} else {
+		query = `
+			UPDATE users 
+			SET device_token = NULL, updated_at = NOW() 
+			WHERE id = $1 AND deleted_at IS NULL
+		`
+		args = []interface{}{id}
+	}
+
+	tag, err := r.db.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update device token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found or already deleted")
+	}
+	return nil
+}
+
+func (r *userRepository) GetDeviceToken(ctx context.Context, id string) (string, error) {
+	query := `
+		SELECT COALESCE(device_token, '')
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	var token string
+	err := r.db.QueryRow(ctx, query, id).Scan(&token)
+	if err != nil {
+		return "", fmt.Errorf("failed to get device token: %w", err)
+	}
+	return token, nil
+}

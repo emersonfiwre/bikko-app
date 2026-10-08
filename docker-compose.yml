@@ -38,6 +38,7 @@ services:
     volumes:
       - bikko_postgres_data:/var/lib/postgresql/data
       - ./migrations/000001_init_schema.up.sql:/docker-entrypoint-initdb.d/01_init_schema.sql
+      - ./migrations/seed_data.sql:/docker-entrypoint-initdb.d/02_seed_data.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bikko -d bikkodb"]
       interval: 5s
