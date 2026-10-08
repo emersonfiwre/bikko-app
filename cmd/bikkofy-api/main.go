@@ -103,6 +103,7 @@ func main() {
 	searchCtrl := infraCtrl.NewSearchController(searchUC)
 	reviewCtrl := infraCtrl.NewReviewController(ratingUC)
 	storageCtrl := infraCtrl.NewStorageController(storageUC)
+	providerCtrl := infraCtrl.NewProviderController()
 
 	// 7. Router
 	r := router.SetupRouter(
@@ -117,6 +118,7 @@ func main() {
 		reviewCtrl,
 		storageCtrl,
 		searchCtrl,
+		providerCtrl,
 		authMiddleware,
 	)
 

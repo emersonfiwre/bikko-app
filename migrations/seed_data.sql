@@ -216,3 +216,11 @@ INSERT INTO reviews (id, order_id, service_id, reviewer_id, bikker_id, rating, c
 -- Aulas de Violão (1 review)
 ('55555555-0000-0000-0000-000000000013', '44444444-0000-0000-0000-000000000023', '22222222-0000-0000-0000-000000000011', '11111111-0000-0000-0000-000000000026', '11111111-0000-0000-0000-000000000008', 5, 'Professor excelente! Tem muita paciência com iniciantes. Recomendo muito.', 1, 0);
 
+
+-- QA Test Accounts for Bikkerfy
+
+-- Carlos Silva (Bikker PRO, full data)
+INSERT INTO users (id, name, email, phone, role) VALUES ('11111111-0000-0000-0000-000000000100', 'Carlos Silva (Bikker PRO)', 'carlos.qa@bikko.com', '11999990000', 'BIKKER') ON CONFLICT DO NOTHING;
+
+-- João Novato (Empty State account)
+INSERT INTO users (id, name, email, phone, role) VALUES ('11111111-0000-0000-0000-000000000101', 'João Novato', 'joao.qa@bikko.com', '11988880000', 'BIKKER') ON CONFLICT DO NOTHING;

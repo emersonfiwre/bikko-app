@@ -23,6 +23,7 @@ func SetupRouter(
 	reviewCtrl *infraCtrl.ReviewController,
 	storageCtrl *infraCtrl.StorageController,
 	searchCtrl *infraCtrl.SearchController,
+	providerCtrl *infraCtrl.ProviderController,
 	authMiddleware gin.HandlerFunc,
 ) *gin.Engine {
 	r := gin.Default()
@@ -59,6 +60,19 @@ func SetupRouter(
 
 		// Search Route (Returns Services + Categories)
 		v1.GET("/search", searchCtrl.Search)
+
+		// Provider (Bikkerfy) Endpoints
+		provider := v1.Group("/provider")
+		{
+			provider.GET("/feed", providerCtrl.GetFeed)
+			provider.GET("/solicitations/:id", providerCtrl.GetSolicitationDetails)
+			provider.POST("/solicitations/:id/proposal", providerCtrl.SubmitProposal)
+			provider.POST("/solicitations/:id/counter-offer", providerCtrl.SubmitCounterOffer)
+			provider.POST("/solicitations/:id/reject", providerCtrl.RejectSolicitation)
+			provider.GET("/portfolio", providerCtrl.GetPortfolio)
+			provider.POST("/portfolio", providerCtrl.AddPortfolioItem)
+			provider.POST("/evaluations", providerCtrl.SubmitClientEvaluation)
+		}
 
 		// Auth Group
 		auth := v1.Group("/auth")
