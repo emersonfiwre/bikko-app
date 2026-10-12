@@ -234,3 +234,7 @@ func TestUserController_DeleteDeviceToken(t *testing.T) {
 		}
 	})
 }
+
+func (m *mockUserRepoForController) UpdateProfilePhoto(ctx context.Context, id string, photoURL string) error {
+	return nil
+}

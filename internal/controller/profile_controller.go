@@ -81,3 +81,32 @@ func (p *ProfileController) UpdateProfile(c *gin.Context) {
 	})
 }
 
+// UpdateProfilePhotoRequest receives the public Cloudflare R2 URL of an image
+// previously uploaded by the client through a pre-signed PUT URL.
+type UpdateProfilePhotoRequest struct {
+	PhotoURL string `json:"photo_url" binding:"required,url"`
+}
+
+func (p *ProfileController) UpdateProfilePhoto(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req UpdateProfilePhotoRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload: " + err.Error()})
+		return
+	}
+
+	if err := p.profileService.UpdateProfilePhoto(c.Request.Context(), userID, req.PhotoURL); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile photo: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":    "success",
+		"photo_url": req.PhotoURL,
+	})
+}

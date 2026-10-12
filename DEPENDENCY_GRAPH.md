@@ -18,6 +18,7 @@
 | `POST` | `/api/v1/auth/login` | `AuthController.Login` | `AuthService.Login` | `UserRepository` | `User` | `users` |
 | `GET` | `/api/v1/profile` | `ProfileController.GetProfile` | `ProfileService.GetProfile` | `UserRepository` | `Profile` | `users` (JWT Protected) |
 | `PUT` | `/api/v1/profile` | `ProfileController.UpdateProfile` | `ProfileService.UpdateProfile` | `UserRepository` | `Profile` | `users` (JWT Protected) |
+| `PUT` | `/api/v1/profile/photo` | `ProfileController.UpdateProfilePhoto` | `ProfileService.UpdateProfilePhoto` | `UserRepository.UpdateProfilePhoto` | `Profile` | `users.profile_photo_url` (Cloudflare R2 URL, JWT Protected) |
 | `DELETE` | `/api/v1/profile` | `ProfileController.DeleteAccount` | `ProfileService.DeleteAccount` | `UserRepository` | N/A | `users` (Soft Delete, JWT Protected) |
 | `POST` | `/api/v1/users/device-token` | `UserController.SaveDeviceToken` | `UserRepository.UpdateDeviceToken` | `UserRepository` | N/A | `users.device_token` (FCM Token, JWT Protected) |
 | `DELETE` | `/api/v1/users/device-token` | `UserController.DeleteDeviceToken` | `UserRepository.UpdateDeviceToken` | `UserRepository` | N/A | `users.device_token` (Remove FCM Token, JWT Protected) |

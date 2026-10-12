@@ -42,6 +42,7 @@ type UserRepository interface {
 	GetByPhone(ctx context.Context, phone string) (*User, error)
 	GetByID(ctx context.Context, id string) (*User, error)
 	UpdateUser(ctx context.Context, id string, name, email, phone string) error
+	UpdateProfilePhoto(ctx context.Context, id string, photoURL string) error
 	DeleteUser(ctx context.Context, id string) error
 	UpdateDeviceToken(ctx context.Context, id string, token *string) error
 	GetDeviceToken(ctx context.Context, id string) (string, error)

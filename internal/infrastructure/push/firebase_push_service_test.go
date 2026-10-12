@@ -187,3 +187,7 @@ func TestFirebasePushService_SendNotification(t *testing.T) {
 		}
 	})
 }
+
+func (m *mockUserRepoForPush) UpdateProfilePhoto(ctx context.Context, id string, photoURL string) error {
+	return nil
+}

@@ -19,9 +19,10 @@ func init() {
 }
 
 type fakeProfileService struct {
-	getProfileFunc    func(ctx context.Context, userID string) (*model.ProfileResponse, error)
-	deleteAccountFunc func(ctx context.Context, userID string) error
-	updateProfileFunc func(ctx context.Context, userID, name, email, phone string) error
+	getProfileFunc         func(ctx context.Context, userID string) (*model.ProfileResponse, error)
+	deleteAccountFunc      func(ctx context.Context, userID string) error
+	updateProfileFunc      func(ctx context.Context, userID, name, email, phone string) error
+	updateProfilePhotoFunc func(ctx context.Context, userID, photoURL string) error
 }
 
 func (f *fakeProfileService) GetProfile(ctx context.Context, userID string) (*model.ProfileResponse, error) {
@@ -43,6 +44,13 @@ func (f *fakeProfileService) UpdateProfile(ctx context.Context, userID, name, em
 		return f.updateProfileFunc(ctx, userID, name, email, phone)
 	}
 	return errors.New("not implemented")
+}
+
+func (f *fakeProfileService) UpdateProfilePhoto(ctx context.Context, userID, photoURL string) error {
+	if f.updateProfilePhotoFunc != nil {
+		return f.updateProfilePhotoFunc(ctx, userID, photoURL)
+	}
+	return nil
 }
 
 func TestProfileController_GetProfile(t *testing.T) {
@@ -288,3 +296,75 @@ func TestProfileController_UpdateProfile(t *testing.T) {
 		}
 	})
 }
+
+func TestProfileController_UpdateProfilePhoto(t *testing.T) {
+	t.Run("returns 401 Unauthorized if no userID", func(t *testing.T) {
+		ctrl := NewProfileController(&fakeProfileService{})
+		router := gin.New()
+		router.PUT("/profile/photo", ctrl.UpdateProfilePhoto)
+
+		body, _ := json.Marshal(UpdateProfilePhotoRequest{PhotoURL: "https://cdn.bikko.com.br/avatar.jpg"})
+		req, _ := http.NewRequest(http.MethodPut, "/profile/photo", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d", w.Code)
+		}
+	})
+
+	t.Run("returns 400 Bad Request if photo_url is invalid", func(t *testing.T) {
+		ctrl := NewProfileController(&fakeProfileService{})
+		router := gin.New()
+		router.PUT("/profile/photo", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfilePhoto(c)
+		})
+
+		invalidBody := []byte(`{"photo_url":"not-a-valid-url"}`)
+		req, _ := http.NewRequest(http.MethodPut, "/profile/photo", bytes.NewBuffer(invalidBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("success updates profile photo", func(t *testing.T) {
+		var savedUserID, savedURL string
+		svc := &fakeProfileService{
+			updateProfilePhotoFunc: func(ctx context.Context, userID, photoURL string) error {
+				savedUserID = userID
+				savedURL = photoURL
+				return nil
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile/photo", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfilePhoto(c)
+		})
+
+		payload := UpdateProfilePhotoRequest{
+			PhotoURL: "https://cdn.bikko.com.br/profiles/user_123.jpg",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile/photo", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		if savedUserID != "user_123" || savedURL != "https://cdn.bikko.com.br/profiles/user_123.jpg" {
+			t.Errorf("unexpected saved values: userID=%s, photoURL=%s", savedUserID, savedURL)
+		}
+	})
+}
+

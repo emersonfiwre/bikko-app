@@ -94,6 +94,7 @@ func SetupRouter(
 			// Profile Routes
 			protected.GET("/profile", profileCtrl.GetProfile)
 			protected.PUT("/profile", profileCtrl.UpdateProfile)
+			protected.PUT("/profile/photo", profileCtrl.UpdateProfilePhoto)
 			protected.DELETE("/profile", profileCtrl.DeleteAccount)
 
 			// User Device Token Routes

@@ -13,6 +13,7 @@ type ProfileService interface {
 	GetProfile(ctx context.Context, userID string) (*model.ProfileResponse, error)
 	DeleteAccount(ctx context.Context, userID string) error
 	UpdateProfile(ctx context.Context, userID, name, email, phone string) error
+	UpdateProfilePhoto(ctx context.Context, userID, photoURL string) error
 }
 
 type profileService struct {
@@ -75,3 +76,12 @@ func (s *profileService) UpdateProfile(ctx context.Context, userID, name, email,
 	return s.userRepo.UpdateUser(ctx, userID, name, email, phone)
 }
 
+func (s *profileService) UpdateProfilePhoto(ctx context.Context, userID, photoURL string) error {
+	if userID == "" {
+		return fmt.Errorf("user id required")
+	}
+	if photoURL == "" {
+		return fmt.Errorf("photo url required")
+	}
+	return s.userRepo.UpdateProfilePhoto(ctx, userID, photoURL)
+}

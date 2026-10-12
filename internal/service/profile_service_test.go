@@ -342,3 +342,45 @@ func TestProfileService_UpdateProfile(t *testing.T) {
 		}
 	})
 }
+
+func (f *fakeUserRepository) UpdateProfilePhoto(ctx context.Context, id string, photoURL string) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	if u, ok := f.users[id]; ok {
+		u.ProfilePhotoURL = photoURL
+		return nil
+	}
+	return errors.New("user not found")
+}
+
+func TestProfileService_UpdateProfilePhoto(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("error when userID is empty", func(t *testing.T) {
+		svc := NewProfileService(&fakeUserRepository{}, &fakeProfileRepo{})
+		if err := svc.UpdateProfilePhoto(ctx, "", "https://cdn/x.jpg"); err == nil {
+			t.Fatal("expected error for empty userID")
+		}
+	})
+
+	t.Run("error when photo url is empty", func(t *testing.T) {
+		svc := NewProfileService(&fakeUserRepository{}, &fakeProfileRepo{})
+		if err := svc.UpdateProfilePhoto(ctx, "usr_1", ""); err == nil {
+			t.Fatal("expected error for empty photo url")
+		}
+	})
+
+	t.Run("success persists photo url", func(t *testing.T) {
+		userRepo := &fakeUserRepository{
+			users: map[string]*domain.User{"usr_1": {ID: "usr_1"}},
+		}
+		svc := NewProfileService(userRepo, &fakeProfileRepo{})
+		if err := svc.UpdateProfilePhoto(ctx, "usr_1", "https://cdn/avatar.jpg"); err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if got := userRepo.users["usr_1"].ProfilePhotoURL; got != "https://cdn/avatar.jpg" {
+			t.Errorf("expected photo url to be persisted, got %q", got)
+		}
+	})
+}
