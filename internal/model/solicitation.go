@@ -14,6 +14,7 @@ type SolicitationItem struct {
 	Price               float64  `json:"price"`
 	ScheduledDate       string   `json:"scheduled_date"`
 	Description         string   `json:"description"`
+	TechnicalReport     *string  `json:"technical_report,omitempty"`
 	CancellationReason  *string  `json:"cancellation_reason,omitempty"`
 	CancelledBy         *string  `json:"cancelled_by,omitempty"`
 	CounterOfferPrice   *float64 `json:"counter_offer_price,omitempty"`

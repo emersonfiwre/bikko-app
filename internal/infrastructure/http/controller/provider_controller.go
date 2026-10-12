@@ -101,5 +101,13 @@ func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "evaluated", "message": "Avaliação salva com sucesso."})
+	if len([]rune(req.TechnicalReport)) > 280 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "relatório técnico deve ter no máximo 280 caracteres"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":           "evaluated",
+		"message":          "Relatório técnico e avaliação salvos com sucesso.",
+		"technical_report": req.TechnicalReport,
+	})
 }

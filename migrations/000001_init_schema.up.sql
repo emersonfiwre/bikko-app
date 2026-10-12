@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS orders (
     status order_status DEFAULT 'SCHEDULED',
     final_price DECIMAL(10, 2) NOT NULL,
     scheduled_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    technical_report VARCHAR(280),
     cancellation_reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

@@ -26,6 +26,7 @@ type SolicitationController struct {
 func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService ...push.PushService) *SolicitationController {
 	reason := "O provedor não tinha disponibilidade para a data/hora solicitada."
 	cancelledByProvider := "PROVIDER"
+	completedTechReport := "Higienização completa dos 2 quartos, sala, cozinha e banheiros, desengorduramento de bancadas e limpeza de vidros concluída sem pendências."
 
 	var ps push.PushService
 	if len(pushService) > 0 {
@@ -105,6 +106,7 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService
 				Price:            180.0,
 				ScheduledDate:    "15 de Junho às 09:00",
 				Description:      "Limpeza completa de apartamento de 2 quartos, sala, cozinha e 2 banheiros.",
+				TechnicalReport:  &completedTechReport,
 				Photos:           []string{},
 				CreatedDate:      "14 de Junho",
 			},
@@ -237,6 +239,7 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 	id := c.Param("id")
 	var req struct {
 		Status              string   `json:"status" binding:"required"`
+		TechnicalReport     *string  `json:"technical_report"`
 		CancellationReason  *string  `json:"cancellation_reason"`
 		CancelledBy         *string  `json:"cancelled_by"`
 		CounterOfferPrice   *float64 `json:"counter_offer_price"`
@@ -249,12 +252,25 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 		return
 	}
 
+	if req.TechnicalReport != nil {
+		runes := []rune(strings.TrimSpace(*req.TechnicalReport))
+		if len(runes) > 280 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "relatório técnico deve ter no máximo 280 caracteres"})
+			return
+		}
+		trimmed := string(runes)
+		req.TechnicalReport = &trimmed
+	}
+
 	ctrl.mu.Lock()
 	defer ctrl.mu.Unlock()
 
 	for i, s := range ctrl.solicitations {
 		if s.ID == id {
 			ctrl.solicitations[i].Status = req.Status
+			if req.TechnicalReport != nil && *req.TechnicalReport != "" {
+				ctrl.solicitations[i].TechnicalReport = req.TechnicalReport
+			}
 			if req.CancellationReason != nil {
 				ctrl.solicitations[i].CancellationReason = req.CancellationReason
 			}
