@@ -23,6 +23,7 @@ import (
 )
 
 func main() {
+	middleware.InitStructuredLogger()
 	cfg := config.LoadConfig()
 
 	// 1. Initialize PostgreSQL connection pool (pgxpool)
@@ -31,6 +32,7 @@ func main() {
 		log.Printf("Aviso: Não foi possível conectar ao PostgreSQL: %v. Operando com fallbacks.\n", err)
 	} else {
 		defer pgPool.Close()
+		middleware.RegisterPgxPoolMetrics(pgPool)
 	}
 
 	// 2. Initialize Redis service (go-redis/v9)
@@ -51,9 +53,11 @@ func main() {
 	var reviewRepo = postgres.NewReviewRepository(pgPool)
 	var bikkerRepo = postgres.NewBikkerRepository(pgPool)
 	var userRepo = postgres.NewUserRepository(pgPool)
+	var solicitationPgRepo = postgres.NewSolicitationPostgresRepository(pgPool)
 
 	// Early instantiation for Solicitations (tracks active orders for Profile)
 	solicitationCtrl := controller.NewSolicitationController(serviceRepo)
+	solicitationCtrl.SetPostgresRepository(solicitationPgRepo)
 
 	// Legacy Mocks for Auth & Profile orders (mock orders still needed temporarily)
 	profileMockRepo := repository.NewMockProfileRepository(solicitationCtrl)
@@ -103,7 +107,8 @@ func main() {
 	searchCtrl := infraCtrl.NewSearchController(searchUC)
 	reviewCtrl := infraCtrl.NewReviewController(ratingUC)
 	storageCtrl := infraCtrl.NewStorageController(storageUC)
-	providerCtrl := infraCtrl.NewProviderController()
+	providerCtrl := infraCtrl.NewProviderControllerWithDeps(solicitationPgRepo, serviceRepo, bikkerRepo, pushSvc)
+	providerCtrl.SetSolicitationStore(solicitationCtrl)
 
 	// 7. Router
 	r := router.SetupRouter(

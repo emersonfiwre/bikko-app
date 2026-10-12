@@ -8,6 +8,7 @@ import (
 	"bikko-app/internal/infrastructure/http/middleware"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 )
 
@@ -26,12 +27,21 @@ func SetupRouter(
 	providerCtrl *infraCtrl.ProviderController,
 	authMiddleware gin.HandlerFunc,
 ) *gin.Engine {
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
+
+	// Observability Middlewares (Correlation ID, Structured JSON Logging, Prometheus Metrics)
+	r.Use(middleware.CorrelationIDMiddleware())
+	r.Use(middleware.SlogMiddleware())
+	r.Use(middleware.MetricsMiddleware())
 
 	// Initialize and apply IP Rate Limiter (5 requests per second, burst 10)
 	limiter := middleware.NewIPRateLimiter(rate.Limit(5), 10)
 	limiter.Cleanup()
 	r.Use(middleware.RateLimitMiddleware(limiter))
+
+	// Prometheus Metrics Endpoint
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Root Route
 	r.GET("/", func(c *gin.Context) {
@@ -61,29 +71,32 @@ func SetupRouter(
 		// Search Route (Returns Services + Categories)
 		v1.GET("/search", searchCtrl.Search)
 
-		// Provider (Bikkerfy) Endpoints
-		provider := v1.Group("/provider")
-		{
-			provider.GET("/feed", providerCtrl.GetFeed)
-			provider.GET("/solicitations/:id", providerCtrl.GetSolicitationDetails)
-			provider.POST("/solicitations/:id/proposal", providerCtrl.SubmitProposal)
-			provider.POST("/solicitations/:id/counter-offer", providerCtrl.SubmitCounterOffer)
-			provider.POST("/solicitations/:id/reject", providerCtrl.RejectSolicitation)
-			provider.GET("/portfolio", providerCtrl.GetPortfolio)
-			provider.POST("/portfolio", providerCtrl.AddPortfolioItem)
-			provider.POST("/evaluations", providerCtrl.SubmitClientEvaluation)
-		}
-
 		// Auth Group
 		auth := v1.Group("/auth")
 		{
 			auth.POST("/register", authCtrl.Register)
 			auth.POST("/login", authCtrl.Login)
-			
 		}
 
-		// Storage (Cloudflare R2 Pre-signed URLs)
-		v1.POST("/storage/upload-url", storageCtrl.GenerateUploadURL)
+		// Provider (Bikkerfy) Endpoints (JWT Protected when authMiddleware != nil)
+		provider := v1.Group("/provider")
+		if authMiddleware != nil {
+			provider.Use(authMiddleware)
+		}
+		{
+			provider.GET("/feed", providerCtrl.GetFeed)
+			provider.GET("/solicitations/:id", providerCtrl.GetSolicitationDetails)
+			provider.POST("/solicitations/:id/proposal", providerCtrl.SubmitProposal)
+			provider.POST("/solicitations/:id/counter-offer", providerCtrl.SubmitCounterOffer)
+			provider.POST("/solicitations/:id/accept", providerCtrl.AcceptCounterOffer)
+			provider.POST("/solicitations/:id/accept-counter-offer", providerCtrl.AcceptCounterOffer)
+			provider.POST("/solicitations/:id/reject", providerCtrl.RejectSolicitation)
+			provider.GET("/portfolio", providerCtrl.GetPortfolio)
+			provider.POST("/portfolio", providerCtrl.AddPortfolioItem)
+			provider.DELETE("/portfolio/:id", providerCtrl.DeletePortfolioItem)
+			provider.PUT("/profile", providerCtrl.UpdateProviderProfile)
+			provider.POST("/evaluations", providerCtrl.SubmitClientEvaluation)
+		}
 
 		// Protected Routes (Require JWT)
 		protected := v1.Group("/")
@@ -91,6 +104,9 @@ func SetupRouter(
 			protected.Use(authMiddleware)
 		}
 		{
+			// Storage (Cloudflare R2 Pre-signed URLs)
+			protected.POST("/storage/upload-url", storageCtrl.GenerateUploadURL)
+
 			// Profile Routes
 			protected.GET("/profile", profileCtrl.GetProfile)
 			protected.PUT("/profile", profileCtrl.UpdateProfile)
@@ -106,6 +122,7 @@ func SetupRouter(
 			protected.GET("/solicitations/:id", solicitationCtrl.GetSolicitationByID)
 			protected.POST("/solicitations", solicitationCtrl.CreateSolicitation)
 			protected.POST("/solicitations/:id/status", solicitationCtrl.UpdateStatus)
+			protected.PATCH("/solicitations/:id/status", solicitationCtrl.UpdateStatus)
 			protected.POST("/solicitations/:id/review", reviewCtrl.CreateSolicitationReview)
 
 			// Orders Routes
@@ -118,4 +135,3 @@ func SetupRouter(
 
 	return r
 }
-

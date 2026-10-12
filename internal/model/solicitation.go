@@ -1,25 +1,44 @@
 package model
 
-type SolicitationItem struct {
-	ID                  string   `json:"id"`
-	ClientID            string   `json:"client_id,omitempty"`
-	ProviderID          string   `json:"provider_id,omitempty"`
-	ServiceID           string   `json:"service_id"`
-	ServiceName         string   `json:"service_name"`
-	ProviderName        string   `json:"provider_name"`
-	ProviderTitle       string   `json:"provider_title"`
-	ProviderRating      string   `json:"provider_rating"`
-	ProviderPhotoURL    string   `json:"provider_photo_url"`
-	Status              string   `json:"status"`
-	Price               float64  `json:"price"`
-	ScheduledDate       string   `json:"scheduled_date"`
-	Description         string   `json:"description"`
-	TechnicalReport     *string  `json:"technical_report,omitempty"`
-	CancellationReason  *string  `json:"cancellation_reason,omitempty"`
-	CancelledBy         *string  `json:"cancelled_by,omitempty"`
-	CounterOfferPrice   *float64 `json:"counter_offer_price,omitempty"`
-	CounterOfferMessage *string  `json:"counter_offer_message,omitempty"`
-	RenegotiationCount  int      `json:"renegotiation_count"`
-	Photos              []string `json:"photos"`
-	CreatedDate         string   `json:"created_date"`
+type CounterOfferItem struct {
+	ID           string  `json:"id"`
+	Round        int     `json:"round"`
+	Author       string  `json:"author"` // "CLIENT" or "PROVIDER"
+	IsFromClient bool    `json:"is_from_client"`
+	Price        float64 `json:"price"`
+	Reason       string  `json:"reason"`
 }
+
+type SolicitationItem struct {
+	ID                  string             `json:"id"`
+	ClientID            string             `json:"client_id,omitempty"`
+	ProviderID          string             `json:"provider_id,omitempty"`
+	ServiceID           string             `json:"service_id"`
+	ServiceName         string             `json:"service_name"`
+	ProviderName        string             `json:"provider_name"`
+	ProviderTitle       string             `json:"provider_title"`
+	ProviderRating      string             `json:"provider_rating"`
+	ProviderPhotoURL    string             `json:"provider_photo_url"`
+	Status              string             `json:"status"`
+	Price               float64            `json:"price"`
+	ScheduledDate       string             `json:"scheduled_date"`
+	Description         string             `json:"description"`
+	TechnicalReport     *string            `json:"technical_report,omitempty"`
+	CancellationReason  *string            `json:"cancellation_reason,omitempty"`
+	CancelledBy         *string            `json:"cancelled_by,omitempty"`
+	CounterOfferPrice   *float64           `json:"counter_offer_price,omitempty"`
+	CounterOfferMessage *string            `json:"counter_offer_message,omitempty"`
+	RenegotiationCount  int                `json:"renegotiation_count"`
+	CounterOffers       []CounterOfferItem `json:"counter_offers,omitempty"`
+	Photos              []string           `json:"photos"`
+	CreatedDate         string             `json:"created_date"`
+}
+
+type SolicitationStore interface {
+	GetInMemorySolicitationByID(id string) *SolicitationItem
+	SyncSolicitationInMemory(item SolicitationItem)
+	ApplyProviderProposalInMemory(id, providerID string, price float64, note string, accepted bool) *SolicitationItem
+	ApplyProviderCounterOfferInMemory(id, providerID string, counterPrice float64, reason string) *SolicitationItem
+	ApplyProviderRejectInMemory(id, providerID, reason string) *SolicitationItem
+}
+

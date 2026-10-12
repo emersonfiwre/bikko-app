@@ -537,4 +537,42 @@ func TestSolicitationController_PushNotifications(t *testing.T) {
 			t.Errorf("unexpected data payload: %+v", call.data)
 		}
 	})
+
+	t.Run("sends push to provider when client updates status to ACTIVE", func(t *testing.T) {
+		fakePush := &fakePushServiceForTest{}
+		ctrl := NewSolicitationController(nil, fakePush)
+		router := setupSolicitationRouter(ctrl)
+
+		payload := map[string]interface{}{
+			"status": "ACTIVE",
+		}
+		data, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, "/solicitations/sol_1/status", bytes.NewBuffer(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", w.Code)
+		}
+
+		if len(fakePush.calls) != 1 {
+			t.Fatalf("expected 1 push notification call, got %d", len(fakePush.calls))
+		}
+
+		call := fakePush.calls[0]
+		if call.userID != "11111111-0000-0000-0000-000000000009" {
+			t.Errorf("expected provider recipient, got %s", call.userID)
+		}
+		if call.title != "Proposta Aceita! 🎉" {
+			t.Errorf("expected title 'Proposta Aceita! 🎉', got '%s'", call.title)
+		}
+		if call.body != "O cliente aceitou sua proposta! O serviço está confirmado no seu histórico de pedidos." {
+			t.Errorf("unexpected body: '%s'", call.body)
+		}
+		if call.data["solicitation_id"] != "sol_1" {
+			t.Errorf("unexpected data payload: %+v", call.data)
+		}
+	})
 }

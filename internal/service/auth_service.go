@@ -18,6 +18,7 @@ var (
 	ErrInvalidCredentials   = errors.New("invalid_credentials")
 	ErrUserNotFound         = errors.New("user_not_found")
 	ErrInvalidFirebaseToken = errors.New("invalid_firebase_token")
+	ErrUserAlreadyExists    = errors.New("user_already_exists")
 )
 
 type AuthService interface {
@@ -48,10 +49,8 @@ func (s *authService) VerifyIDToken(ctx context.Context, idToken string) (*fireb
 	// Fallback for development / mock test when Firebase credentials are not provided
 	if strings.HasPrefix(idToken, "mock_") || idToken == "test_token" {
 		return &firebaseAuth.Token{
-			UID: "mock_firebase_uid",
-			Claims: map[string]interface{}{
-				
-			},
+			UID:    "mock_firebase_uid",
+			Claims: map[string]interface{}{},
 		}, nil
 	}
 
@@ -80,15 +79,62 @@ func (s *authService) Register(ctx context.Context, req model.RegisterRequest) (
 		}
 	}
 
+	if phone != "" {
+		if existing, err := s.repo.GetByPhone(ctx, phone); err == nil && existing != nil {
+			return nil, ErrUserAlreadyExists
+		}
+	}
+
+	if req.Email != "" {
+		if existing, err := s.repo.GetByEmail(ctx, req.Email); err == nil && existing != nil {
+			return nil, ErrUserAlreadyExists
+		}
+	}
+
+	isBikker := req.IsBikker || req.Profession != ""
+
 	user := &domain.User{
 		FullName: name,
 		Email:    req.Email,
 		Phone:    phone,
 		CPF:      req.CPF,
+		IsBikker: isBikker,
+	}
+
+	if isBikker {
+		profession := strings.TrimSpace(req.Profession)
+		if profession == "" {
+			profession = "Prestador de Serviços"
+		}
+		locationName := strings.TrimSpace(req.LocationName)
+		if locationName == "" {
+			locationName = "São Paulo, SP"
+		}
+		lat := -23.55052
+		lon := -46.63330
+		if req.Latitude != nil {
+			lat = *req.Latitude
+		}
+		if req.Longitude != nil {
+			lon = *req.Longitude
+		}
+		user.Bikker = &domain.Bikker{
+			Profession:      profession,
+			ExperienceYears: strings.TrimSpace(req.ExperienceYears),
+			Description:     strings.TrimSpace(req.Description),
+			LocationName:    locationName,
+			Latitude:        lat,
+			Longitude:       lon,
+			IsActive:        true,
+		}
 	}
 
 	createdUser, err := s.repo.CreateUser(ctx, user)
 	if err != nil {
+		errLower := strings.ToLower(err.Error())
+		if strings.Contains(errLower, "duplicate key") || strings.Contains(errLower, "23505") || strings.Contains(errLower, "unique constraint") {
+			return nil, ErrUserAlreadyExists
+		}
 		return nil, err
 	}
 
@@ -101,10 +147,11 @@ func (s *authService) Register(ctx context.Context, req model.RegisterRequest) (
 		Message: "Usuário registrado com sucesso",
 		Token:   token,
 		User: model.User{
-			ID:    createdUser.ID,
-			Name:  createdUser.FullName,
-			Email: createdUser.Email,
-			Phone: createdUser.Phone,
+			ID:       createdUser.ID,
+			Name:     createdUser.FullName,
+			Email:    createdUser.Email,
+			Phone:    createdUser.Phone,
+			IsBikker: createdUser.IsBikker,
 		},
 	}, nil
 }
@@ -140,10 +187,11 @@ func (s *authService) Login(ctx context.Context, req model.LoginRequest) (*model
 			Message: "Login realizado com sucesso",
 			Token:   tokenStr,
 			User: model.User{
-				ID:    user.ID,
-				Name:  user.FullName,
-				Email: user.Email,
-				Phone: user.Phone,
+				ID:       user.ID,
+				Name:     user.FullName,
+				Email:    user.Email,
+				Phone:    user.Phone,
+				IsBikker: user.IsBikker,
 			},
 		}, nil
 	}

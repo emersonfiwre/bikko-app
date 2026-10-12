@@ -252,3 +252,58 @@ func (r *bikkerRepository) GetAll(ctx context.Context, limit int) ([]domain.Bikk
 
 	return list, nil
 }
+
+func (r *bikkerRepository) UpsertBikkerProfile(ctx context.Context, bikker *domain.Bikker) (*domain.BikkerProfileResponse, error) {
+	if r.pool == nil {
+		return nil, fmt.Errorf("banco de dados não inicializado")
+	}
+	if bikker == nil || bikker.ID == "" {
+		return nil, fmt.Errorf("bikker id is required")
+	}
+
+	profession := bikker.Profession
+	if profession == "" {
+		profession = "Prestador de Serviços"
+	}
+	locationName := bikker.LocationName
+	if locationName == "" {
+		locationName = "São Paulo, SP"
+	}
+	lat := bikker.Latitude
+	lon := bikker.Longitude
+	if lat == 0 {
+		lat = -23.55052
+	}
+	if lon == 0 {
+		lon = -46.63330
+	}
+
+	_, _ = r.pool.Exec(ctx, `UPDATE users SET is_bikker = TRUE, updated_at = NOW() WHERE id::text = $1`, bikker.ID)
+
+	query := `
+		INSERT INTO bikkers (id, profession, experience_years, description, location_name, location_geom, is_active, updated_at)
+		VALUES ($1::uuid, $2, NULLIF($3, ''), NULLIF($4, ''), $5, ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, $8, NOW())
+		ON CONFLICT (id) DO UPDATE SET
+			profession = COALESCE(NULLIF(EXCLUDED.profession, ''), bikkers.profession),
+			experience_years = COALESCE(EXCLUDED.experience_years, bikkers.experience_years),
+			description = COALESCE(EXCLUDED.description, bikkers.description),
+			location_name = COALESCE(NULLIF(EXCLUDED.location_name, ''), bikkers.location_name),
+			location_geom = EXCLUDED.location_geom,
+			is_active = EXCLUDED.is_active,
+			updated_at = NOW()
+	`
+	if _, err := r.pool.Exec(ctx, query,
+		bikker.ID,
+		profession,
+		bikker.ExperienceYears,
+		bikker.Description,
+		locationName,
+		lon,
+		lat,
+		bikker.IsActive,
+	); err != nil {
+		return nil, fmt.Errorf("failed to upsert bikker profile: %w", err)
+	}
+
+	return r.GetByID(ctx, bikker.ID)
+}

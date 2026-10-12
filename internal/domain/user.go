@@ -15,6 +15,7 @@ type User struct {
 	Rating               float64   `json:"rating"`
 	TotalRatings         int       `json:"total_ratings"`
 	IsBikker             bool      `json:"is_bikker"`
+	Bikker               *Bikker   `json:"bikker,omitempty"`
 	NotificationsEnabled bool      `json:"notifications_enabled"`
 	DeviceToken          string    `json:"device_token,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`

@@ -31,3 +31,7 @@ type BikkerRepository interface {
 	GetNearBikkers(ctx context.Context, lat, lon float64, limit int) ([]NearBikkerItem, error)
 	GetAll(ctx context.Context, limit int) ([]BikkerProfileResponse, error)
 }
+
+type BikkerProfileUpdater interface {
+	UpsertBikkerProfile(ctx context.Context, bikker *Bikker) (*BikkerProfileResponse, error)
+}

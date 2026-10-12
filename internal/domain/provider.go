@@ -25,19 +25,50 @@ type PortfolioItem struct {
 	CompletedAt time.Time `json:"completed_at"`
 }
 
+type PortfolioCreateRequest struct {
+	Title        string   `json:"title"`
+	Name         string   `json:"name"`
+	Category     string   `json:"category"`
+	CategoryID   string   `json:"category_id"`
+	Description  string   `json:"description"`
+	ImageURL     string   `json:"image_url"`
+	ThumbnailURL string   `json:"thumbnail_url"`
+	Photos       []string `json:"photos"`
+	Latitude     *float64 `json:"latitude"`
+	Longitude    *float64 `json:"longitude"`
+}
+
+type ProviderProfileUpdateRequest struct {
+	Profession      string   `json:"profession"`
+	ExperienceYears string   `json:"experience_years"`
+	Description     string   `json:"description"`
+	LocationName    string   `json:"location_name"`
+	Latitude        *float64 `json:"latitude"`
+	Longitude       *float64 `json:"longitude"`
+	IsActive        *bool    `json:"is_active"`
+}
+
 type ProposalRequest struct {
-	Price float64 `json:"price" binding:"required"`
-	Note  string  `json:"note"`
+	Price              float64 `json:"price"`
+	Note               string  `json:"note"`
+	Accepted           bool    `json:"accepted"`
+	AcceptCounterOffer bool    `json:"accept_counter_offer"`
 }
 
 type CounterOfferRequest struct {
-	CounterPrice float64 `json:"counter_price" binding:"required"`
-	Reason       string  `json:"reason"`
+	CounterPrice       float64 `json:"counter_price"`
+	Price              float64 `json:"price"`
+	Reason             string  `json:"reason"`
+	Note               string  `json:"note"`
+	Accepted           bool    `json:"accepted"`
+	AcceptCounterOffer bool    `json:"accept_counter_offer"`
 }
 
 type RejectRequest struct {
-	ReasonChip string `json:"reason_chip" binding:"required"`
-	Note       string `json:"note"`
+	ReasonChip         string `json:"reason_chip"`
+	Reason             string `json:"reason"`
+	CancellationReason string `json:"cancellation_reason"`
+	Note               string `json:"note"`
 }
 
 type ClientEvaluationRequest struct {

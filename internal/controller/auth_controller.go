@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"bikko-app/internal/model"
 	"bikko-app/internal/service"
@@ -27,6 +28,16 @@ func (a *AuthController) Register(c *gin.Context) {
 
 	resp, err := a.authService.Register(c.Request.Context(), req)
 	if err != nil {
+		errLower := strings.ToLower(err.Error())
+		if errors.Is(err, service.ErrUserAlreadyExists) || strings.Contains(errLower, "duplicate") || strings.Contains(errLower, "already_exists") {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    "USER_ALREADY_EXISTS",
+				"error":   "user_already_exists",
+				"message": "Você já possui uma conta cadastrada. Por favor, realize o login.",
+			})
+			return
+		}
+
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    "REGISTRATION_FAILED",
 			"error":   err.Error(),

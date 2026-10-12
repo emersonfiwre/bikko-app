@@ -1,27 +1,129 @@
 package controller
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"bikko-app/internal/domain"
+	"bikko-app/internal/infrastructure/http/middleware"
+	"bikko-app/internal/infrastructure/persistence/postgres"
+	"bikko-app/internal/infrastructure/push"
+	"bikko-app/internal/model"
 	"bikko-app/internal/repository"
+
 	"github.com/gin-gonic/gin"
 )
 
-type ProviderController struct{}
+type ProviderController struct {
+	solRepo     *postgres.SolicitationPostgresRepository
+	serviceRepo domain.ServiceRepository
+	bikkerRepo  domain.BikkerRepository
+	pushService push.PushService
+	store       model.SolicitationStore
+}
 
 func NewProviderController() *ProviderController {
 	return &ProviderController{}
 }
 
+func NewProviderControllerWithDeps(
+	solRepo *postgres.SolicitationPostgresRepository,
+	serviceRepo domain.ServiceRepository,
+	bikkerRepo domain.BikkerRepository,
+	pushService ...push.PushService,
+) *ProviderController {
+	var ps push.PushService
+	if len(pushService) > 0 {
+		ps = pushService[0]
+	}
+	return &ProviderController{
+		solRepo:     solRepo,
+		serviceRepo: serviceRepo,
+		bikkerRepo:  bikkerRepo,
+		pushService: ps,
+	}
+}
+
+func (pc *ProviderController) SetDependencies(
+	solRepo *postgres.SolicitationPostgresRepository,
+	serviceRepo domain.ServiceRepository,
+	bikkerRepo domain.BikkerRepository,
+	pushService ...push.PushService,
+) {
+	pc.solRepo = solRepo
+	pc.serviceRepo = serviceRepo
+	pc.bikkerRepo = bikkerRepo
+	if len(pushService) > 0 {
+		pc.pushService = pushService[0]
+	}
+}
+
+func (pc *ProviderController) SetSolicitationStore(store model.SolicitationStore) {
+	pc.store = store
+}
+
+func (pc *ProviderController) resolveProviderUserID(c *gin.Context) string {
+	userID := middleware.GetUserID(c)
+	if userID == "" {
+		userID = c.GetString("user_id")
+	}
+	if userID == "" {
+		userID = c.Query("bikker_id")
+	}
+	return strings.TrimSpace(userID)
+}
+
+func (pc *ProviderController) getExistingSolicitation(ctx context.Context, id string) *model.SolicitationItem {
+	if pc.solRepo != nil && pc.solRepo.HasPool() {
+		if sol, err := pc.solRepo.GetSolicitationByID(ctx, id); err == nil && sol != nil {
+			return sol
+		}
+	}
+	if pc.store != nil {
+		if sol := pc.store.GetInMemorySolicitationByID(id); sol != nil {
+			return sol
+		}
+	}
+	return nil
+}
+
+func (pc *ProviderController) isMatchingClientCounterOffer(existing *model.SolicitationItem, price float64) bool {
+	if existing == nil || price <= 0 {
+		return false
+	}
+	if len(existing.CounterOffers) > 0 {
+		last := existing.CounterOffers[len(existing.CounterOffers)-1]
+		if (strings.EqualFold(last.Author, "CLIENT") || last.IsFromClient) && math.Abs(price-last.Price) < 0.01 {
+			return true
+		}
+	}
+	if existing.CounterOfferPrice != nil && *existing.CounterOfferPrice > 0 && math.Abs(price-*existing.CounterOfferPrice) < 0.01 {
+		return true
+	}
+	return false
+}
+
 func (pc *ProviderController) GetFeed(c *gin.Context) {
 	empty := c.Query("empty") == "true"
-	userID := c.GetString("user_id")
+	userID := pc.resolveProviderUserID(c)
 
-	if empty || userID == "empty-qa-id" {
+	if empty || userID == "empty-qa-id" || userID == "11111111-0000-0000-0000-000000000101" {
 		c.JSON(http.StatusOK, []domain.OpportunityLead{})
 		return
+	}
+
+	if pc.solRepo != nil && pc.solRepo.HasPool() {
+		leads, err := pc.solRepo.GetProviderFeed(c.Request.Context(), userID)
+		if err == nil && len(leads) > 0 {
+			c.JSON(http.StatusOK, leads)
+			return
+		}
 	}
 
 	repo := repository.NewMockProviderRepository()
@@ -30,7 +132,36 @@ func (pc *ProviderController) GetFeed(c *gin.Context) {
 
 func (pc *ProviderController) GetSolicitationDetails(c *gin.Context) {
 	id := c.Param("id")
-	// Return mock details
+
+	if sol := pc.getExistingSolicitation(c.Request.Context(), id); sol != nil {
+		urgency := "SCHEDULED"
+		if strings.Contains(strings.ToLower(sol.Description), "urgente") || strings.Contains(strings.ToLower(sol.Description), "vazamento") {
+			urgency = "EMERGENCY"
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"id": sol.ID,
+			"lead": domain.OpportunityLead{
+				ID:             sol.ID,
+				Title:          sol.ServiceName,
+				Description:    sol.Description,
+				Category:       sol.ProviderTitle,
+				Urgency:        urgency,
+				Photos:         sol.Photos,
+				PriceType:      "BUDGET_TO_NEGOTIATE",
+				DistanceKm:     2.5,
+				Neighborhood:   "São Paulo, SP",
+				ClientName:     "Cliente Verificado",
+				ClientVerified: true,
+				CreatedAt:      time.Now().Add(-1 * time.Hour),
+			},
+			"solicitation":      sol,
+			"counter_offers":    sol.CounterOffers,
+			"negotiation_count": sol.RenegotiationCount,
+			"status":            sol.Status,
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"id": id,
 		"lead": domain.OpportunityLead{
@@ -52,38 +183,375 @@ func (pc *ProviderController) GetSolicitationDetails(c *gin.Context) {
 	})
 }
 
-func (pc *ProviderController) SubmitProposal(c *gin.Context) {
+func (pc *ProviderController) handleAcceptCounterOffer(
+	c *gin.Context,
+	id string,
+	userID string,
+	price float64,
+	note string,
+	existing *model.SolicitationItem,
+) {
+	finalPrice := price
+	if finalPrice <= 0 && existing != nil {
+		if existing.CounterOfferPrice != nil && *existing.CounterOfferPrice > 0 {
+			finalPrice = *existing.CounterOfferPrice
+		} else if existing.Price > 0 {
+			finalPrice = existing.Price
+		}
+	}
+
+	var updated *model.SolicitationItem
+	if pc.solRepo != nil && pc.solRepo.HasPool() {
+		if res, err := pc.solRepo.AcceptCounterOffer(c.Request.Context(), id, userID, finalPrice, note); err == nil && res != nil {
+			updated = res
+		}
+	}
+
+	if pc.store != nil {
+		inMem := pc.store.ApplyProviderProposalInMemory(id, userID, finalPrice, note, true)
+		if updated != nil {
+			pc.store.SyncSolicitationInMemory(*updated)
+		} else {
+			updated = inMem
+		}
+	}
+
+	if updated == nil {
+		updated = &model.SolicitationItem{
+			ID:          id,
+			ClientID:    "11111111-0000-0000-0000-000000000099",
+			ProviderID:  userID,
+			ServiceName: "Solicitação de Serviço",
+			Status:      "ACTIVE",
+			Price:       finalPrice,
+		}
+	}
+
+	if pc.pushService != nil && updated.ClientID != "" {
+		pushData := map[string]string{
+			"solicitation_id": updated.ID,
+			"type":            "accepted",
+		}
+		if pushErr := pc.pushService.SendNotification(
+			c.Request.Context(),
+			updated.ClientID,
+			"Proposta Aceita pelo Profissional! 🎉",
+			"O profissional aceitou sua contraproposta! O serviço está confirmado no seu histórico de pedidos.",
+			pushData,
+		); pushErr != nil {
+			log.Printf("[ProviderController] Failed to send accepted proposal push notification: %v\n", pushErr)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":       "ACTIVE",
+		"message":      "Proposta aceita com sucesso.",
+		"solicitation": updated,
+	})
+}
+
+func (pc *ProviderController) AcceptCounterOffer(c *gin.Context) {
+	id := c.Param("id")
 	var req domain.ProposalRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "proposal_submitted", "message": "Proposta enviada com sucesso."})
+
+	existing := pc.getExistingSolicitation(c.Request.Context(), id)
+	pc.handleAcceptCounterOffer(c, id, pc.resolveProviderUserID(c), req.Price, req.Note, existing)
+}
+
+func (pc *ProviderController) SubmitProposal(c *gin.Context) {
+	id := c.Param("id")
+	var req domain.ProposalRequest
+	queryAccept := strings.EqualFold(c.Query("accept_counter_offer"), "true") || strings.EqualFold(c.Query("accepted"), "true")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		if !(err == io.EOF && queryAccept) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	existing := pc.getExistingSolicitation(c.Request.Context(), id)
+	accepting := req.Accepted || req.AcceptCounterOffer || queryAccept || pc.isMatchingClientCounterOffer(existing, req.Price)
+
+	if !accepting && req.Price <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "preço da proposta é obrigatório"})
+		return
+	}
+
+	userID := pc.resolveProviderUserID(c)
+	if accepting {
+		pc.handleAcceptCounterOffer(c, id, userID, req.Price, req.Note, existing)
+		return
+	}
+
+	isCounterOffer := existing != nil && (len(existing.CounterOffers) > 0 || existing.CounterOfferPrice != nil)
+
+	var updated *model.SolicitationItem
+	if pc.solRepo != nil && pc.solRepo.HasPool() {
+		if res, err := pc.solRepo.SubmitProviderProposal(
+			c.Request.Context(),
+			id,
+			userID,
+			req.Price,
+			req.Note,
+		); err == nil && res != nil {
+			updated = res
+		}
+	}
+
+	if pc.store != nil {
+		inMem := pc.store.ApplyProviderProposalInMemory(id, userID, req.Price, req.Note, false)
+		if updated != nil {
+			pc.store.SyncSolicitationInMemory(*updated)
+		} else {
+			updated = inMem
+		}
+	}
+
+	if updated != nil {
+		if pc.pushService != nil && updated.ClientID != "" {
+			pushTitle := "Novo Orçamento Recebido! 💬"
+			pushBody := fmt.Sprintf("O profissional enviou um orçamento de R$ %.2f para %s.", req.Price, updated.ServiceName)
+			pushType := "budget_received"
+			if isCounterOffer {
+				pushTitle = "Nova Contraproposta do Profissional! 💬"
+				pushBody = fmt.Sprintf("O profissional enviou uma contraproposta de R$ %.2f para %s.", req.Price, updated.ServiceName)
+				pushType = "counter_offer"
+			}
+			pushData := map[string]string{
+				"solicitation_id": updated.ID,
+				"type":            pushType,
+			}
+			if pushErr := pc.pushService.SendNotification(
+				c.Request.Context(),
+				updated.ClientID,
+				pushTitle,
+				pushBody,
+				pushData,
+			); pushErr != nil {
+				log.Printf("[ProviderController] Failed to send proposal push notification: %v\n", pushErr)
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"status":       updated.Status,
+			"message":      "Proposta enviada com sucesso.",
+			"solicitation": updated,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "BUDGET_RECEIVED", "message": "Proposta enviada com sucesso."})
 }
 
 func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
+	id := c.Param("id")
 	var req domain.CounterOfferRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "counter_offer_submitted", "message": "Contra-proposta enviada com sucesso.", "negotiation_count": 1})
+
+	counterPrice := req.CounterPrice
+	if counterPrice <= 0 && req.Price > 0 {
+		counterPrice = req.Price
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" && strings.TrimSpace(req.Note) != "" {
+		reason = strings.TrimSpace(req.Note)
+	}
+
+	existing := pc.getExistingSolicitation(c.Request.Context(), id)
+	queryAccept := strings.EqualFold(c.Query("accept_counter_offer"), "true") || strings.EqualFold(c.Query("accepted"), "true")
+	accepting := req.Accepted || req.AcceptCounterOffer || queryAccept || pc.isMatchingClientCounterOffer(existing, counterPrice)
+
+	userID := pc.resolveProviderUserID(c)
+	if accepting {
+		pc.handleAcceptCounterOffer(c, id, userID, counterPrice, reason, existing)
+		return
+	}
+
+	if counterPrice <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "preço da contraproposta é obrigatório"})
+		return
+	}
+
+	var updated *model.SolicitationItem
+	if pc.solRepo != nil && pc.solRepo.HasPool() {
+		providerRole := "PROVIDER"
+		if res, err := pc.solRepo.UpdateSolicitationStatus(c.Request.Context(), id, postgres.SolicitationStatusUpdateInput{
+			Status:              "BUDGET_RECEIVED",
+			CounterOfferPrice:   &counterPrice,
+			CounterOfferMessage: &reason,
+			SenderRole:          &providerRole,
+			SenderID:            &userID,
+		}); err == nil && res != nil {
+			updated = res
+		}
+	}
+
+	if pc.store != nil {
+		inMem := pc.store.ApplyProviderCounterOfferInMemory(id, userID, counterPrice, reason)
+		if updated != nil {
+			pc.store.SyncSolicitationInMemory(*updated)
+		} else {
+			updated = inMem
+		}
+	}
+
+	if updated != nil {
+		if pc.pushService != nil && updated.ClientID != "" {
+			pushData := map[string]string{
+				"solicitation_id": updated.ID,
+				"type":            "counter_offer",
+			}
+			if pushErr := pc.pushService.SendNotification(
+				c.Request.Context(),
+				updated.ClientID,
+				"Nova Contraproposta do Profissional! 💬",
+				fmt.Sprintf("O profissional enviou uma contraproposta de R$ %.2f para %s.", counterPrice, updated.ServiceName),
+				pushData,
+			); pushErr != nil {
+				log.Printf("[ProviderController] Failed to send counter-offer push notification: %v\n", pushErr)
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"status":            updated.Status,
+			"message":           "Contra-proposta enviada com sucesso.",
+			"negotiation_count": updated.RenegotiationCount,
+			"solicitation":      updated,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "BUDGET_RECEIVED", "message": "Contra-proposta enviada com sucesso.", "negotiation_count": 1})
 }
 
 func (pc *ProviderController) RejectSolicitation(c *gin.Context) {
+	id := c.Param("id")
 	var req domain.RejectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "rejected", "message": "Solicitação rejeitada."})
+
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = strings.TrimSpace(req.ReasonChip)
+	}
+	if reason == "" {
+		reason = strings.TrimSpace(req.CancellationReason)
+	}
+	note := strings.TrimSpace(req.Note)
+	if note != "" {
+		if reason != "" && !strings.Contains(reason, note) {
+			reason = reason + " - " + note
+		} else if reason == "" {
+			reason = note
+		}
+	}
+	if reason == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "motivo da rejeição é obrigatório"})
+		return
+	}
+
+	providerRole := "PROVIDER"
+	userID := pc.resolveProviderUserID(c)
+
+	var updated *model.SolicitationItem
+	if pc.solRepo != nil && pc.solRepo.HasPool() {
+		if res, err := pc.solRepo.UpdateSolicitationStatus(c.Request.Context(), id, postgres.SolicitationStatusUpdateInput{
+			Status:             "CANCELLED",
+			CancellationReason: &reason,
+			CancelledBy:        &providerRole,
+			SenderRole:         &providerRole,
+			SenderID:           &userID,
+		}); err == nil && res != nil {
+			updated = res
+		}
+	}
+
+	if pc.store != nil {
+		inMem := pc.store.ApplyProviderRejectInMemory(id, userID, reason)
+		if updated != nil {
+			pc.store.SyncSolicitationInMemory(*updated)
+		} else {
+			updated = inMem
+		}
+	}
+
+	if pc.pushService != nil && updated != nil && updated.ClientID != "" {
+		pushData := map[string]string{
+			"solicitation_id": updated.ID,
+			"type":            "cancelled",
+		}
+		if pushErr := pc.pushService.SendNotification(
+			c.Request.Context(),
+			updated.ClientID,
+			"Solicitação Cancelada pelo Profissional",
+			fmt.Sprintf("O profissional não pôde atender sua solicitação. Motivo: %s", reason),
+			pushData,
+		); pushErr != nil {
+			log.Printf("[ProviderController] Failed to send reject push notification: %v\n", pushErr)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":              "CANCELLED",
+		"message":             "Solicitação rejeitada.",
+		"cancelled_by":        providerRole,
+		"cancellation_reason": reason,
+		"solicitation":        updated,
+	})
 }
 
 func (pc *ProviderController) GetPortfolio(c *gin.Context) {
 	empty := c.Query("empty") == "true"
-	if empty {
+	userID := pc.resolveProviderUserID(c)
+	if empty || userID == "empty-qa-id" || userID == "11111111-0000-0000-0000-000000000101" {
 		c.JSON(http.StatusOK, []domain.PortfolioItem{})
 		return
+	}
+
+	if pc.serviceRepo != nil {
+		targetBikkerID := userID
+		if targetBikkerID == "" {
+			targetBikkerID = "11111111-0000-0000-0000-000000000100"
+		}
+		services, err := pc.serviceRepo.GetActiveServicesByBikkerID(c.Request.Context(), targetBikkerID)
+		if err != nil || len(services) == 0 {
+			services, err = pc.serviceRepo.GetActiveServicesByBikkerID(c.Request.Context(), "11111111-0000-0000-0000-000000000001")
+		}
+		if err == nil && len(services) > 0 {
+			items := make([]domain.PortfolioItem, 0, len(services))
+			for _, s := range services {
+				catName := "Geral"
+				if s.Category != nil && s.Category.Name != "" {
+					catName = s.Category.Name
+				}
+				img := s.ThumbnailURL
+				if img == "" && len(s.Photos) > 0 {
+					img = s.Photos[0]
+				}
+				completedAt := s.CreatedAt
+				if completedAt.IsZero() {
+					completedAt = time.Now().Add(-7 * 24 * time.Hour)
+				}
+				items = append(items, domain.PortfolioItem{
+					ID:          s.ID,
+					Title:       s.Name,
+					Category:    catName,
+					ImageUrl:    img,
+					CompletedAt: completedAt,
+				})
+			}
+			c.JSON(http.StatusOK, items)
+			return
+		}
 	}
 
 	repo := repository.NewMockProviderRepository()
@@ -91,8 +559,137 @@ func (pc *ProviderController) GetPortfolio(c *gin.Context) {
 }
 
 func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
-	// Usually would handle form-data or JSON with photo URL
+	var req domain.PortfolioCreateRequest
+	_ = c.ShouldBindJSON(&req)
+
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = strings.TrimSpace(req.Name)
+	}
+	catInput := strings.TrimSpace(req.CategoryID)
+	if catInput == "" {
+		catInput = strings.TrimSpace(req.Category)
+	}
+	imgURL := strings.TrimSpace(req.ImageURL)
+	if imgURL == "" {
+		imgURL = strings.TrimSpace(req.ThumbnailURL)
+	}
+	if imgURL == "" && len(req.Photos) > 0 {
+		imgURL = req.Photos[0]
+	}
+
+	if mutator, ok := pc.serviceRepo.(domain.ServiceMutationRepository); ok && title != "" {
+		bikkerID := pc.resolveProviderUserID(c)
+		if bikkerID == "" {
+			bikkerID = "11111111-0000-0000-0000-000000000100"
+		}
+		lat := -23.55052
+		lon := -46.63330
+		if req.Latitude != nil {
+			lat = *req.Latitude
+		}
+		if req.Longitude != nil {
+			lon = *req.Longitude
+		}
+
+		created, err := mutator.CreateService(c.Request.Context(), &domain.Service{
+			BikkerID:     bikkerID,
+			CategoryID:   catInput,
+			Name:         title,
+			Description:  req.Description,
+			ThumbnailURL: imgURL,
+			Photos:       req.Photos,
+			Latitude:     lat,
+			Longitude:    lon,
+			IsActive:     true,
+		})
+		if err == nil && created != nil {
+			catName := req.Category
+			if created.Category != nil && created.Category.Name != "" {
+				catName = created.Category.Name
+			}
+			c.JSON(http.StatusCreated, gin.H{
+				"status": "added",
+				"id":     created.ID,
+				"item": domain.PortfolioItem{
+					ID:          created.ID,
+					Title:       created.Name,
+					Category:    catName,
+					ImageUrl:    created.ThumbnailURL,
+					CompletedAt: created.CreatedAt,
+				},
+			})
+			return
+		}
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"status": "added", "id": "port-new"})
+}
+
+func (pc *ProviderController) DeletePortfolioItem(c *gin.Context) {
+	id := c.Param("id")
+	bikkerID := pc.resolveProviderUserID(c)
+
+	if mutator, ok := pc.serviceRepo.(domain.ServiceMutationRepository); ok {
+		if err := mutator.DeleteService(c.Request.Context(), id, bikkerID); err == nil {
+			c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
+}
+
+func (pc *ProviderController) UpdateProviderProfile(c *gin.Context) {
+	var req domain.ProviderProfileUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	bikkerID := pc.resolveProviderUserID(c)
+	if bikkerID == "" {
+		bikkerID = "11111111-0000-0000-0000-000000000100"
+	}
+
+	lat := -23.55052
+	lon := -46.63330
+	if req.Latitude != nil {
+		lat = *req.Latitude
+	}
+	if req.Longitude != nil {
+		lon = *req.Longitude
+	}
+	isActive := true
+	if req.IsActive != nil {
+		isActive = *req.IsActive
+	}
+
+	if updater, ok := pc.bikkerRepo.(domain.BikkerProfileUpdater); ok {
+		profile, err := updater.UpsertBikkerProfile(c.Request.Context(), &domain.Bikker{
+			ID:              bikkerID,
+			Profession:      strings.TrimSpace(req.Profession),
+			ExperienceYears: strings.TrimSpace(req.ExperienceYears),
+			Description:     strings.TrimSpace(req.Description),
+			LocationName:    strings.TrimSpace(req.LocationName),
+			Latitude:        lat,
+			Longitude:       lon,
+			IsActive:        isActive,
+		})
+		if err == nil && profile != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "updated",
+				"message": "Perfil profissional atualizado com sucesso.",
+				"profile": profile,
+			})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "updated",
+		"message": "Perfil profissional atualizado com sucesso.",
+	})
 }
 
 func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
@@ -105,6 +702,16 @@ func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "relatório técnico deve ter no máximo 280 caracteres"})
 		return
 	}
+
+	if pc.solRepo != nil && pc.solRepo.HasPool() && req.SolicitationID != "" {
+		_ = pc.solRepo.SubmitClientEvaluation(
+			c.Request.Context(),
+			req.SolicitationID,
+			pc.resolveProviderUserID(c),
+			req,
+		)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":           "evaluated",
 		"message":          "Relatório técnico e avaliação salvos com sucesso.",

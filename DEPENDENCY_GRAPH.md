@@ -25,14 +25,25 @@
 | `POST` | `/api/v1/reviews` | `ReviewController.CreateReview`| `RatingUseCase.CreateReview` | `ReviewRepository.CreateReviewInTx` | `Review`, `Order`, `Service`, `Bikker` | `reviews`, `orders`, `services`, `bikkers` (Transactional Cascade) |
 | `POST` | `/api/v1/solicitations/:id/review` | `ReviewController.CreateSolicitationReview` | `RatingUseCase.CreateReview` | `ReviewRepository.CreateReviewInTx` | `Review`, `Order`, `Service`, `Bikker` | `reviews`, `orders`, `services`, `bikkers` (Transactional Cascade) |
 | `POST` | `/api/v1/orders/:id/review` | `ReviewController.CreateOrderReview` | `RatingUseCase.CreateReview` | `ReviewRepository.CreateReviewInTx` | `Review`, `Order`, `Service`, `Bikker` | `reviews`, `orders`, `services`, `bikkers` (Transactional Cascade) |
-| `POST` | `/api/v1/storage/upload-url` | `StorageController.GenerateUploadURL` | `StorageUseCase.GeneratePreSignedURL` | `StorageService` (Cloudflare R2) | N/A | Cloudflare R2 Bucket |
+| `GET` | `/metrics` | `promhttp.Handler()` | `MetricsMiddleware` / `RegisterPgxPoolMetrics` | N/A | Prometheus Metrics | HTTP RPS, Latency (`p50/p95/p99`) & `pgxpool` Conns |
+| `POST` | `/api/v1/storage/upload-url` | `StorageController.GenerateUploadURL` | `StorageUseCase.GeneratePreSignedURL` | `StorageService` (Cloudflare R2) | N/A | Cloudflare R2 Bucket (JWT Protected) |
 | `GET` | `/api/v1/bootstrap` | `BootstrapController.GetBootstrap` | `RedisService.GetFeatures` | N/A | `BootstrapResponse` | Redis Key: `bikkofy:features` |
 | `GET` | `/api/v1/services/:id` | `ServiceController.GetServiceByID` | `ServiceUseCase.GetServiceByID` | `ServiceRepository` | `Service` | `services`, `categories`, `bikkers` |
 | `GET` | `/api/v1/bikkers/:id` | `BikkerController.GetBikkerByID` | `BikkerUseCase.GetBikkerByID` | `BikkerRepository` | `Bikker` | `bikkers`, `services`, `reviews` |
-| `GET` | `/api/v1/solicitations` | `SolicitationController.GetSolicitations` | `SolicitationUseCase.GetSolicitations` | `SolicitationRepository` | `Solicitation` | `quote_requests`, `orders` |
-| `GET` | `/api/v1/solicitations/:id` | `SolicitationController.GetSolicitationByID` | `SolicitationUseCase.GetSolicitationByID` | `SolicitationRepository` | `Solicitation` | `quote_requests`, `orders` |
-| `POST` | `/api/v1/solicitations` | `SolicitationController.CreateSolicitation` | `SolicitationUseCase.CreateSolicitation` | `SolicitationRepository`, `ServiceRepository` | `Solicitation` | `quote_requests` |
-| `PATCH`| `/api/v1/solicitations/:id/status` | `SolicitationController.UpdateStatus` | `SolicitationUseCase.UpdateStatus` | `SolicitationRepository` | `Solicitation` | `quote_requests`, `orders` (max 5 counter-offers) |
+| `GET` | `/api/v1/solicitations` | `SolicitationController.GetSolicitations` | `SolicitationPostgresRepository.GetSolicitationsByUser` | `SolicitationPostgresRepository` | `SolicitationItem` | `quote_requests`, `quote_negotiations`, `orders` (JWT Protected) |
+| `GET` | `/api/v1/solicitations/:id` | `SolicitationController.GetSolicitationByID` | `SolicitationPostgresRepository.GetSolicitationByID` | `SolicitationPostgresRepository` | `SolicitationItem` | `quote_requests`, `quote_negotiations`, `orders` (JWT Protected) |
+| `POST` | `/api/v1/solicitations` | `SolicitationController.CreateSolicitation` | `SolicitationPostgresRepository.CreateSolicitation` | `SolicitationPostgresRepository`, `ServiceRepository` | `SolicitationItem` | `quote_requests`, `quote_negotiations` (JWT Protected) |
+| `POST` / `PATCH`| `/api/v1/solicitations/:id/status` | `SolicitationController.UpdateStatus` | `SolicitationPostgresRepository.UpdateSolicitationStatus` | `SolicitationPostgresRepository` | `SolicitationItem` | `quote_requests`, `quote_negotiations`, `orders` (max 5 counter-offers, JWT Protected) |
+| `GET` | `/api/v1/provider/feed` | `ProviderController.GetFeed` | `SolicitationPostgresRepository.GetProviderFeed` | `SolicitationPostgresRepository` | `OpportunityLead` | `quote_requests`, `services`, `users` (JWT Protected) |
+| `GET` | `/api/v1/provider/solicitations/:id` | `ProviderController.GetSolicitationDetails` | `SolicitationPostgresRepository.GetSolicitationByID` | `SolicitationPostgresRepository` | `OpportunityLead`, `CounterOfferItem` | `quote_requests`, `quote_negotiations`, `orders` (JWT Protected) |
+| `POST` | `/api/v1/provider/solicitations/:id/proposal` | `ProviderController.SubmitProposal` | `SolicitationPostgresRepository.SubmitProviderProposal` | `SolicitationPostgresRepository` | `ProposalRequest` | `quote_requests`, `quote_negotiations`, `orders` (JWT Protected) |
+| `POST` | `/api/v1/provider/solicitations/:id/counter-offer` | `ProviderController.SubmitCounterOffer` | `SolicitationPostgresRepository.UpdateSolicitationStatus` | `SolicitationPostgresRepository` | `CounterOfferRequest` | `quote_requests`, `quote_negotiations` (max 5 rounds, JWT Protected) |
+| `POST` | `/api/v1/provider/solicitations/:id/reject` | `ProviderController.RejectSolicitation` | `SolicitationPostgresRepository.UpdateSolicitationStatus` | `SolicitationPostgresRepository` | `RejectRequest` | `quote_requests`, `orders` (JWT Protected) |
+| `GET` | `/api/v1/provider/portfolio` | `ProviderController.GetPortfolio` | `ServiceRepository.GetServicesByBikkerID` | `ServiceRepository` | `PortfolioItem` | `services`, `service_photos` (JWT Protected) |
+| `POST` | `/api/v1/provider/portfolio` | `ProviderController.AddPortfolioItem` | `ServiceRepository.CreateService` | `ServiceRepository` | `PortfolioItem` | `services`, `service_photos` (JWT Protected) |
+| `DELETE` | `/api/v1/provider/portfolio/:id` | `ProviderController.DeletePortfolioItem` | `ServiceRepository.DeleteService` | `ServiceRepository` | N/A | `services`, `service_photos` (JWT Protected) |
+| `PUT` | `/api/v1/provider/profile` | `ProviderController.UpdateProviderProfile` | `BikkerRepository.UpsertBikkerProfile` | `BikkerRepository` | `BikkerProfileUpdateInput` | `bikkers` (JWT Protected) |
+| `POST` | `/api/v1/provider/evaluations` | `ProviderController.SubmitClientEvaluation` | `SolicitationPostgresRepository.SubmitClientEvaluation` | `SolicitationPostgresRepository` | `ClientEvaluationRequest` | `orders.technical_report`, `users.rating` (JWT Protected) |
 
 ---
 
@@ -40,10 +51,10 @@
 
 ```
 [ HTTP Client (Android / Web) ]
-               |
+               | (X-Correlation-ID Header)
                v
 [ Gin Router (internal/router/router.go) ]
-               |
+               | -> Middlewares: CorrelationIDMiddleware -> SlogMiddleware -> MetricsMiddleware -> RateLimitMiddleware -> AuthMiddleware
                v
 [ Controllers (internal/infrastructure/http/controller/ & internal/controller/) ]
                |
@@ -57,24 +68,25 @@
        |
        v
 [ PostgreSQL 16 + PostGIS Database ]
- (Tables: users, bikkers, categories, services, quote_requests, orders, reviews)
+ (Tables: users, bikkers, categories, services, service_photos, quote_requests, quote_negotiations, orders, reviews)
 ```
 
 ### Source Code Files Location Table
 
 | Layer | Package / Subpackage | Key Source Files | Exact File Link |
 | :--- | :--- | :--- | :--- |
-| **Entry Point** | `main` | `cmd/api/main.go` | [main.go](file:///Users/emersontorres/projects/bikko-app/cmd/api/main.go) |
+| **Entry Point** | `main` | `cmd/bikkofy-api/main.go`, `cmd/bikkerfy-api/main.go` | [main.go](file:///Users/emersontorres/projects/bikko-app/cmd/bikkofy-api/main.go) |
 | **Config** | `config` | `config/config.go` | [config.go](file:///Users/emersontorres/projects/bikko-app/config/config.go) |
 | **Routing** | `router` | `internal/router/router.go` | [router.go](file:///Users/emersontorres/projects/bikko-app/internal/router/router.go) |
-| **HTTP Controller** | `controller` / `infraCtrl` | `home_controller.go`, `search_controller.go`, `review_controller.go`, `storage_controller.go`, `auth_controller.go`, `user_controller.go`, `solicitation_controller.go` | [user_controller.go](file:///Users/emersontorres/projects/bikko-app/internal/controller/user_controller.go) |
+| **Middlewares & Observability** | `middleware` | `auth_middleware.go`, `rate_limit.go`, `correlation_middleware.go`, `slog_middleware.go`, `metrics_middleware.go` | [correlation_middleware.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/http/middleware/correlation_middleware.go) |
+| **HTTP Controller** | `controller` / `infraCtrl` | `home_controller.go`, `search_controller.go`, `review_controller.go`, `storage_controller.go`, `auth_controller.go`, `user_controller.go`, `solicitation_controller.go`, `provider_controller.go` | [provider_controller.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/http/controller/provider_controller.go) |
 | **Business Logic** | `usecase` / `service` | `home_usecase.go`, `search_usecase.go`, `rating_usecase.go`, `storage_usecase.go`, `auth_service.go`, `profile_service.go` | [home_usecase.go](file:///Users/emersontorres/projects/bikko-app/internal/usecase/home_usecase.go) |
 | **Push Notifications**| `push` | `firebase_push_service.go` | [firebase_push_service.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/push/firebase_push_service.go) |
-| **Persistence** | `postgres` | `client.go`, `service_repository.go`, `category_repository.go`, `review_repository.go`, `user_repository.go` | [user_repository.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/persistence/postgres/user_repository.go) |
+| **Persistence** | `postgres` | `client.go`, `service_repository.go`, `category_repository.go`, `review_repository.go`, `user_repository.go`, `bikker_repository.go`, `solicitation_repository.go` | [solicitation_repository.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/persistence/postgres/solicitation_repository.go) |
 | **Cache** | `cache` | `redis.go` | [redis.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/cache/redis.go) |
 | **Cloud Storage** | `storage` | `r2.go` | [r2.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/storage/r2.go) |
-| **Database Schema** | `migrations` | `000001_init_schema.up.sql`, `000002_add_profile_edit_fields_to_users.up.sql`, `000003_add_device_token_to_users.up.sql`, `000004_add_technical_report_to_orders.up.sql` | [000004_add_technical_report_to_orders.up.sql](file:///Users/emersontorres/projects/bikko-app/migrations/000004_add_technical_report_to_orders.up.sql) |
-| **Unit Tests** | `testing` | `profile_repository_test.go`, `profile_service_test.go`, `profile_controller_test.go`, `home_usecase_test.go`, `home_controller_test.go`, `solicitation_controller_test.go`, `search_usecase_test.go`, `search_controller_test.go`, `category_test.go`, `home_test.go`, `quote_test.go`, `user_test.go`, `bikker_controller_test.go`, `storage_controller_test.go`, `user_controller_test.go`, `firebase_push_service_test.go` | [firebase_push_service_test.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/push/firebase_push_service_test.go) |
+| **Database Schema** | `migrations` | `000001_init_schema.up.sql`, `000002_add_deleted_at_to_users.up.sql`, `000003_add_device_token_to_users.up.sql`, `000004_add_technical_report_to_orders.up.sql`, `000004_remove_password_hash.up.sql`, `seed_data.sql` | [000001_init_schema.up.sql](file:///Users/emersontorres/projects/bikko-app/migrations/000001_init_schema.up.sql) |
+| **Unit Tests** | `testing` | `profile_repository_test.go`, `profile_service_test.go`, `profile_controller_test.go`, `home_usecase_test.go`, `solicitation_controller_test.go`, `search_usecase_test.go`, `category_test.go`, `home_test.go`, `quote_test.go`, `user_test.go`, `bikker_controller_test.go`, `user_controller_test.go`, `firebase_push_service_test.go` | [firebase_push_service_test.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/push/firebase_push_service_test.go) |
 
 ---
 

@@ -319,3 +319,193 @@ func (r *serviceRepository) SearchServices(ctx context.Context, q string) ([]dom
 	}
 	return services, nil
 }
+
+func (r *serviceRepository) resolveCategoryID(ctx context.Context, catIDOrName string) string {
+	defaultCategory := "00000000-0000-0000-0000-000000000099"
+	if r.pool == nil {
+		return defaultCategory
+	}
+	var resolved string
+	if catIDOrName != "" {
+		err := r.pool.QueryRow(ctx, `
+			SELECT id::text FROM categories
+			WHERE id::text = $1 OR name ILIKE '%' || $1 || '%'
+			ORDER BY is_active DESC
+			LIMIT 1
+		`, catIDOrName).Scan(&resolved)
+		if err == nil && resolved != "" {
+			return resolved
+		}
+	}
+	err := r.pool.QueryRow(ctx, `SELECT id::text FROM categories WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1`).Scan(&resolved)
+	if err == nil && resolved != "" {
+		return resolved
+	}
+	return defaultCategory
+}
+
+func (r *serviceRepository) CreateService(ctx context.Context, service *domain.Service) (*domain.Service, error) {
+	if r.pool == nil {
+		return nil, fmt.Errorf("banco de dados não inicializado")
+	}
+	if service == nil || service.BikkerID == "" || service.Name == "" {
+		return nil, fmt.Errorf("bikker_id and service name are required")
+	}
+
+	catInput := service.CategoryID
+	if catInput == "" && service.Category != nil {
+		if service.Category.ID != "" {
+			catInput = service.Category.ID
+		} else {
+			catInput = service.Category.Name
+		}
+	}
+	categoryID := r.resolveCategoryID(ctx, catInput)
+
+	lat := service.Latitude
+	lon := service.Longitude
+	if lat == 0 {
+		lat = -23.55052
+	}
+	if lon == 0 {
+		lon = -46.63330
+	}
+
+	thumb := service.ThumbnailURL
+	if thumb == "" && len(service.Photos) > 0 {
+		thumb = service.Photos[0]
+	}
+
+	// Ensure Bikker row exists before inserting service
+	_, _ = r.pool.Exec(ctx, `
+		INSERT INTO bikkers (id, profession, location_name, location_geom, is_active)
+		VALUES ($1::uuid, 'Prestador de Serviços', 'São Paulo, SP', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, TRUE)
+		ON CONFLICT (id) DO NOTHING
+	`, service.BikkerID, lon, lat)
+
+	query := `
+		INSERT INTO services (bikker_id, category_id, name, description, thumbnail_url, location_geom, is_active)
+		VALUES ($1::uuid, $2::uuid, $3, $4, NULLIF($5, ''), ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, TRUE)
+		RETURNING id::text, created_at, updated_at
+	`
+	err := r.pool.QueryRow(ctx, query,
+		service.BikkerID,
+		categoryID,
+		service.Name,
+		service.Description,
+		thumb,
+		lon,
+		lat,
+	).Scan(&service.ID, &service.CreatedAt, &service.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service: %w", err)
+	}
+
+	service.CategoryID = categoryID
+	service.ThumbnailURL = thumb
+	service.IsActive = true
+
+	photos := service.Photos
+	if len(photos) == 0 && thumb != "" {
+		photos = []string{thumb}
+	}
+	for idx, photoURL := range photos {
+		if photoURL == "" {
+			continue
+		}
+		_, _ = r.pool.Exec(ctx, `
+			INSERT INTO service_photos (service_id, photo_url, display_order)
+			VALUES ($1::uuid, $2, $3)
+		`, service.ID, photoURL, idx+1)
+	}
+
+	if full, err := r.GetByID(ctx, service.ID); err == nil && full != nil {
+		return full, nil
+	}
+	return service, nil
+}
+
+func (r *serviceRepository) UpdateService(ctx context.Context, service *domain.Service) (*domain.Service, error) {
+	if r.pool == nil {
+		return nil, fmt.Errorf("banco de dados não inicializado")
+	}
+	if service == nil || service.ID == "" {
+		return nil, fmt.Errorf("service id is required")
+	}
+
+	catInput := service.CategoryID
+	if catInput == "" && service.Category != nil {
+		if service.Category.ID != "" {
+			catInput = service.Category.ID
+		} else {
+			catInput = service.Category.Name
+		}
+	}
+	categoryID := ""
+	if catInput != "" {
+		categoryID = r.resolveCategoryID(ctx, catInput)
+	}
+
+	thumb := service.ThumbnailURL
+	if thumb == "" && len(service.Photos) > 0 {
+		thumb = service.Photos[0]
+	}
+
+	query := `
+		UPDATE services
+		SET name = COALESCE(NULLIF($2, ''), name),
+		    description = COALESCE(NULLIF($3, ''), description),
+		    thumbnail_url = COALESCE(NULLIF($4, ''), thumbnail_url),
+		    category_id = CASE WHEN $5 <> '' THEN $5::uuid ELSE category_id END,
+		    updated_at = NOW()
+		WHERE id::text = $1 AND ($6 = '' OR bikker_id::text = $6)
+	`
+	tag, err := r.pool.Exec(ctx, query,
+		service.ID,
+		service.Name,
+		service.Description,
+		thumb,
+		categoryID,
+		service.BikkerID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update service: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, domain.ErrNotFound
+	}
+
+	if len(service.Photos) > 0 {
+		_, _ = r.pool.Exec(ctx, `DELETE FROM service_photos WHERE service_id::text = $1`, service.ID)
+		for idx, photoURL := range service.Photos {
+			if photoURL == "" {
+				continue
+			}
+			_, _ = r.pool.Exec(ctx, `
+				INSERT INTO service_photos (service_id, photo_url, display_order)
+				VALUES ($1::uuid, $2, $3)
+			`, service.ID, photoURL, idx+1)
+		}
+	}
+
+	return r.GetByID(ctx, service.ID)
+}
+
+func (r *serviceRepository) DeleteService(ctx context.Context, serviceID, bikkerID string) error {
+	if r.pool == nil {
+		return fmt.Errorf("banco de dados não inicializado")
+	}
+	query := `
+		UPDATE services
+		SET is_active = FALSE, updated_at = NOW()
+		WHERE id::text = $1 AND ($2 = '' OR bikker_id::text = $2)
+	`
+	tag, err := r.pool.Exec(ctx, query, serviceID, bikkerID)
+	if err != nil {
+		return fmt.Errorf("failed to delete service: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}

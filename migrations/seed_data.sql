@@ -220,7 +220,27 @@ INSERT INTO reviews (id, order_id, service_id, reviewer_id, bikker_id, rating, c
 -- QA Test Accounts for Bikkerfy
 
 -- Carlos Silva (Bikker PRO, full data)
-INSERT INTO users (id, name, email, phone, role) VALUES ('11111111-0000-0000-0000-000000000100', 'Carlos Silva (Bikker PRO)', 'carlos.qa@bikko.com', '11999990000', 'BIKKER') ON CONFLICT DO NOTHING;
-
+INSERT INTO users (id, full_name, email, phone, cpf, is_bikker, rating, total_ratings, profile_photo_url) VALUES
+('11111111-0000-0000-0000-000000000100', 'Carlos Eduardo Silva', 'carlos.qa@bikko.com', '11999990000', '444.555.666-01', true, 4.95, 156, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg'),
 -- João Novato (Empty State account)
-INSERT INTO users (id, name, email, phone, role) VALUES ('11111111-0000-0000-0000-000000000101', 'João Novato', 'joao.qa@bikko.com', '11988880000', 'BIKKER') ON CONFLICT DO NOTHING;
+('11111111-0000-0000-0000-000000000101', 'João Novato', 'joao.qa@bikko.com', '11988880000', '444.555.666-02', true, 0.00, 0, '')
+ON CONFLICT (id) DO UPDATE SET
+  full_name = EXCLUDED.full_name,
+  phone = EXCLUDED.phone,
+  is_bikker = EXCLUDED.is_bikker;
+
+INSERT INTO bikkers (id, profession, experience_years, description, location_name, location_geom, rating, total_reviews, is_active) VALUES
+('11111111-0000-0000-0000-000000000100', 'Encanador & Eletricista Especializado', 'Mais de 5 anos', 'Especialista em manutenção hidráulica e elétrica residencial com atendimento rápido e garantia.', 'Pinheiros, São Paulo - SP', ST_SetSRID(ST_MakePoint(-46.6914, -23.5673), 4326)::geography, 4.95, 156, true),
+('11111111-0000-0000-0000-000000000101', 'Prestador Geral', 'Menos de 1 ano', '', 'São Paulo - SP', ST_SetSRID(ST_MakePoint(-46.6333, -23.5505), 4326)::geography, 0.00, 0, true)
+ON CONFLICT (id) DO UPDATE SET
+  profession = EXCLUDED.profession,
+  experience_years = EXCLUDED.experience_years,
+  description = EXCLUDED.description,
+  location_name = EXCLUDED.location_name;
+
+-- Sample Counter-Offers for sol_1 (33333333-0000-0000-0000-000000000001)
+INSERT INTO quote_negotiations (id, quote_request_id, sender_id, message, proposed_price, photos, is_counter_offer) VALUES
+('66666666-0000-0000-0000-000000000002', '33333333-0000-0000-0000-000000000001', '11111111-0000-0000-0000-000000000099', 'Consigo fechar hoje se fizer por R$ 300,00 à vista.', 300.00, '[]'::jsonb, true),
+('66666666-0000-0000-0000-000000000003', '33333333-0000-0000-0000-000000000001', '11111111-0000-0000-0000-000000000009', 'Posso chegar em R$ 320,00 já incluindo a tubulação de cobre.', 320.00, '[]'::jsonb, true)
+ON CONFLICT (id) DO NOTHING;
+
