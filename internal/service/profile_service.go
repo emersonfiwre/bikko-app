@@ -50,15 +50,23 @@ func (s *profileService) GetProfile(ctx context.Context, userID string) (*model.
 		rating = "N/A"
 	}
 
+	isActive := true
 	return &model.ProfileResponse{
-		ID:           user.ID,
-		ImageProfile: user.ProfilePhotoURL,
-		Name:         user.FullName,
-		Email:        user.Email,
-		Phone:        user.Phone,
-		Rating:       rating,
-		TotalRatings: user.TotalRatings,
-		Orders:       orders,
+		ID:              user.ID,
+		ImageProfile:    user.ProfilePhotoURL,
+		Name:            user.FullName,
+		Email:           user.Email,
+		Phone:           user.Phone,
+		Rating:          rating,
+		TotalRatings:    user.TotalRatings,
+		Profession:      "Encanador & Eletricista Especializado",
+		ExperienceYears: "Mais de 5 anos",
+		Description:     "Profissional verificado com mais de 8 anos de atuação em instalações e manutenções residenciais na Grande São Paulo.",
+		LocationName:    "Pinheiros, São Paulo - SP",
+		Latitude:        -23.5615,
+		Longitude:       -46.6960,
+		IsActive:        &isActive,
+		Orders:          orders,
 	}, nil
 }
 

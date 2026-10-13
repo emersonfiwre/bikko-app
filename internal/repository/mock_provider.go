@@ -60,19 +60,26 @@ func (r *MockProviderRepository) GetMockLeads() []domain.OpportunityLead {
 }
 
 func (r *MockProviderRepository) GetMockPortfolio() []domain.PortfolioItem {
+	isActive := true
 	return []domain.PortfolioItem{
 		{
 			ID:          "port-1",
 			Title:       "Reparo de Encanamento",
-			Category:    "Encanador",
+			Category:    "Hidráulica",
+			Description: "Reparo emergencial, substituição de registros, sifões e vedação com teste de pressão completo.",
 			ImageUrl:    "https://example.com/port1.jpg",
+			Photos:      []string{"https://example.com/port1.jpg"},
+			IsActive:    &isActive,
 			CompletedAt: time.Now().Add(-30 * 24 * time.Hour),
 		},
 		{
 			ID:          "port-2",
 			Title:       "Pintura Externa",
-			Category:    "Pintor",
+			Category:    "Pintura",
+			Description: "Pintura completa com preparação de parede, massa corrida e acabamento premium.",
 			ImageUrl:    "https://example.com/port2.jpg",
+			Photos:      []string{"https://example.com/port2.jpg"},
+			IsActive:    &isActive,
 			CompletedAt: time.Now().Add(-60 * 24 * time.Hour),
 		},
 	}

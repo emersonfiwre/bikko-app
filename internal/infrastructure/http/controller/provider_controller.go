@@ -130,57 +130,180 @@ func (pc *ProviderController) GetFeed(c *gin.Context) {
 	c.JSON(http.StatusOK, repo.GetMockLeads())
 }
 
-func (pc *ProviderController) GetSolicitationDetails(c *gin.Context) {
-	id := c.Param("id")
+func formatBRLPrice(amount float64) string {
+	return strings.ReplaceAll(fmt.Sprintf("%.2f", amount), ".", ",")
+}
 
-	if sol := pc.getExistingSolicitation(c.Request.Context(), id); sol != nil {
-		urgency := "SCHEDULED"
-		if strings.Contains(strings.ToLower(sol.Description), "urgente") || strings.Contains(strings.ToLower(sol.Description), "vazamento") {
-			urgency = "EMERGENCY"
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"id": sol.ID,
+func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.SolicitationItem, extra map[string]interface{}) gin.H {
+	if sol == nil {
+		resp := gin.H{
+			"id": id,
 			"lead": domain.OpportunityLead{
-				ID:             sol.ID,
-				Title:          sol.ServiceName,
-				Description:    sol.Description,
-				Category:       sol.ProviderTitle,
-				Urgency:        urgency,
-				Photos:         sol.Photos,
+				ID:             id,
+				Title:          "Vazamento sob a pia",
+				Description:    "Cano estourou sob a pia da cozinha, precisa de reparo urgente.",
+				Category:       "Encanador",
+				Urgency:        "EMERGENCY",
+				Photos:         []string{"https://example.com/photo1.jpg", "https://example.com/photo1_2.jpg"},
 				PriceType:      "BUDGET_TO_NEGOTIATE",
 				DistanceKm:     2.5,
-				Neighborhood:   "São Paulo, SP",
-				ClientName:     "Cliente Verificado",
+				Neighborhood:   "Vila Mariana",
+				ClientName:     "Maria",
 				ClientVerified: true,
 				CreatedAt:      time.Now().Add(-1 * time.Hour),
 			},
-			"solicitation":      sol,
-			"counter_offers":    sol.CounterOffers,
-			"negotiation_count": sol.RenegotiationCount,
-			"status":            sol.Status,
-		})
-		return
+			"counter_offers":        []model.CounterOfferItem{},
+			"negotiation_count":     0,
+			"status":                "OPEN",
+			"client_rating":         "4.9",
+			"estimated_price_range": "Estimativa: R$ 130 - 180",
+			"is_order_accepted":     false,
+			"is_proposal_sent":      false,
+			"show_negotiation_mode": false,
+		}
+		for k, v := range extra {
+			resp[k] = v
+		}
+		return resp
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"id": id,
+	urgency := "SCHEDULED"
+	if strings.Contains(strings.ToLower(sol.Description), "urgente") || strings.Contains(strings.ToLower(sol.Description), "vazamento") {
+		urgency = "EMERGENCY"
+	}
+
+	counterOffers := make([]model.CounterOfferItem, 0, len(sol.CounterOffers))
+	for idx, offer := range sol.CounterOffers {
+		formatted := offer.FormattedPrice
+		if formatted == "" {
+			formatted = formatBRLPrice(offer.Price)
+		}
+		round := offer.Round
+		if round <= 0 {
+			round = idx + 1
+		}
+		offerID := offer.ID
+		if offerID == "" {
+			offerID = fmt.Sprintf("co_%d", round)
+		}
+		counterOffers = append(counterOffers, model.CounterOfferItem{
+			ID:             offerID,
+			Round:          round,
+			Author:         offer.Author,
+			IsFromClient:   offer.IsFromClient || strings.EqualFold(offer.Author, "CLIENT"),
+			Price:          offer.Price,
+			FormattedPrice: formatted,
+			Reason:         offer.Reason,
+		})
+	}
+
+	hasBudget := sol.Price > 0 && (strings.EqualFold(sol.Status, "BUDGET_RECEIVED") ||
+		strings.EqualFold(sol.Status, "NEGOTIATING") ||
+		strings.EqualFold(sol.Status, "ACTIVE"))
+	if len(counterOffers) == 0 && hasBudget {
+		reason := "Incluso visita técnica, desmontagem e vedação."
+		if sol.CounterOfferMessage != nil && strings.TrimSpace(*sol.CounterOfferMessage) != "" {
+			reason = strings.TrimSpace(*sol.CounterOfferMessage)
+		}
+		counterOffers = append(counterOffers, model.CounterOfferItem{
+			ID:             "co_1",
+			Round:          1,
+			Author:         "PROVIDER",
+			IsFromClient:   false,
+			Price:          sol.Price,
+			FormattedPrice: formatBRLPrice(sol.Price),
+			Reason:         reason,
+		})
+	}
+
+	if len(counterOffers) > 5 {
+		counterOffers = counterOffers[:5]
+	}
+
+	isAccepted := strings.EqualFold(sol.Status, "ACTIVE") ||
+		strings.EqualFold(sol.Status, "ACCEPTED") ||
+		strings.EqualFold(sol.Status, "COMPLETED")
+	isProposalSent := len(counterOffers) > 0 ||
+		strings.EqualFold(sol.Status, "BUDGET_RECEIVED") ||
+		strings.EqualFold(sol.Status, "NEGOTIATING") ||
+		isAccepted
+	showNegotiationMode := isProposalSent && !isAccepted
+
+	var latestCounterValue *string
+	var latestCounterNote *string
+	for i := len(counterOffers) - 1; i >= 0; i-- {
+		if counterOffers[i].IsFromClient || strings.EqualFold(counterOffers[i].Author, "CLIENT") {
+			val := counterOffers[i].FormattedPrice
+			note := counterOffers[i].Reason
+			latestCounterValue = &val
+			latestCounterNote = &note
+			break
+		}
+	}
+	if latestCounterValue == nil && len(counterOffers) > 0 {
+		last := counterOffers[len(counterOffers)-1]
+		if !last.IsFromClient && len(counterOffers) > 1 {
+			val := last.FormattedPrice
+			note := last.Reason
+			latestCounterValue = &val
+			latestCounterNote = &note
+		}
+	}
+
+	category := sol.Category
+	if category == "" {
+		category = sol.ProviderTitle
+	}
+	if category == "" {
+		category = "Geral"
+	}
+	neighborhood := sol.Neighborhood
+	if neighborhood == "" {
+		neighborhood = "São Paulo, SP"
+	}
+	clientName := sol.ClientName
+	if clientName == "" {
+		clientName = "Cliente Verificado"
+	}
+
+	resp := gin.H{
+		"id": sol.ID,
 		"lead": domain.OpportunityLead{
-			ID:             id,
-			Title:          "Vazamento sob a pia",
-			Description:    "Cano estourou sob a pia da cozinha, precisa de reparo urgente.",
-			Category:       "Encanador",
-			Urgency:        "EMERGENCY",
-			Photos:         []string{"https://example.com/photo1.jpg", "https://example.com/photo1_2.jpg"},
+			ID:             sol.ID,
+			Title:          sol.ServiceName,
+			Description:    sol.Description,
+			Category:       category,
+			Urgency:        urgency,
+			Photos:         sol.Photos,
 			PriceType:      "BUDGET_TO_NEGOTIATE",
 			DistanceKm:     2.5,
-			Neighborhood:   "Vila Mariana",
-			ClientName:     "Maria",
+			Neighborhood:   neighborhood,
+			ClientName:     clientName,
 			ClientVerified: true,
 			CreatedAt:      time.Now().Add(-1 * time.Hour),
 		},
-		"negotiation_count": 0,
-		"status":            "OPEN",
-	})
+		"solicitation":          sol,
+		"counter_offers":        counterOffers,
+		"negotiation_count":     sol.RenegotiationCount,
+		"status":                sol.Status,
+		"client_rating":         "4.9",
+		"estimated_price_range": "Estimativa: R$ 130 - 180",
+		"is_order_accepted":     isAccepted,
+		"is_proposal_sent":      isProposalSent,
+		"show_negotiation_mode": showNegotiationMode,
+		"latest_counter_value":  latestCounterValue,
+		"latest_counter_note":   latestCounterNote,
+	}
+	for k, v := range extra {
+		resp[k] = v
+	}
+	return resp
+}
+
+func (pc *ProviderController) GetSolicitationDetails(c *gin.Context) {
+	id := c.Param("id")
+	sol := pc.getExistingSolicitation(c.Request.Context(), id)
+	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, sol, nil))
 }
 
 func (pc *ProviderController) handleAcceptCounterOffer(
@@ -243,11 +366,10 @@ func (pc *ProviderController) handleAcceptCounterOffer(
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status":       "ACTIVE",
-		"message":      "Proposta aceita com sucesso.",
-		"solicitation": updated,
-	})
+	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
+		"status":  "ACTIVE",
+		"message": "Proposta aceita com sucesso.",
+	}))
 }
 
 func (pc *ProviderController) AcceptCounterOffer(c *gin.Context) {
@@ -287,7 +409,7 @@ func (pc *ProviderController) SubmitProposal(c *gin.Context) {
 		return
 	}
 
-	isCounterOffer := existing != nil && (len(existing.CounterOffers) > 0 || existing.CounterOfferPrice != nil)
+	isCounterOffer := existing != nil && (existing.RenegotiationCount > 0 || existing.CounterOfferPrice != nil)
 
 	var updated *model.SolicitationItem
 	if pc.solRepo != nil && pc.solRepo.HasPool() {
@@ -336,15 +458,16 @@ func (pc *ProviderController) SubmitProposal(c *gin.Context) {
 			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{
-			"status":       updated.Status,
-			"message":      "Proposta enviada com sucesso.",
-			"solicitation": updated,
-		})
+		c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
+			"message": "Proposta enviada com sucesso.",
+		}))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "BUDGET_RECEIVED", "message": "Proposta enviada com sucesso."})
+	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, nil, map[string]interface{}{
+		"status":  "BUDGET_RECEIVED",
+		"message": "Proposta enviada com sucesso.",
+	}))
 }
 
 func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
@@ -419,16 +542,17 @@ func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
 			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{
-			"status":            updated.Status,
-			"message":           "Contra-proposta enviada com sucesso.",
-			"negotiation_count": updated.RenegotiationCount,
-			"solicitation":      updated,
-		})
+		c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
+			"message": "Contra-proposta enviada com sucesso.",
+		}))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "BUDGET_RECEIVED", "message": "Contra-proposta enviada com sucesso.", "negotiation_count": 1})
+	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, nil, map[string]interface{}{
+		"status":            "BUDGET_RECEIVED",
+		"message":           "Contra-proposta enviada com sucesso.",
+		"negotiation_count": 1,
+	}))
 }
 
 func (pc *ProviderController) RejectSolicitation(c *gin.Context) {
@@ -500,13 +624,12 @@ func (pc *ProviderController) RejectSolicitation(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
 		"status":              "CANCELLED",
 		"message":             "Solicitação rejeitada.",
 		"cancelled_by":        providerRole,
 		"cancellation_reason": reason,
-		"solicitation":        updated,
-	})
+	}))
 }
 
 func (pc *ProviderController) GetPortfolio(c *gin.Context) {
@@ -541,11 +664,15 @@ func (pc *ProviderController) GetPortfolio(c *gin.Context) {
 				if completedAt.IsZero() {
 					completedAt = time.Now().Add(-7 * 24 * time.Hour)
 				}
+				active := s.IsActive
 				items = append(items, domain.PortfolioItem{
 					ID:          s.ID,
 					Title:       s.Name,
 					Category:    catName,
+					Description: s.Description,
 					ImageUrl:    img,
+					Photos:      s.Photos,
+					IsActive:    &active,
 					CompletedAt: completedAt,
 				})
 			}
@@ -608,6 +735,7 @@ func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
 			if created.Category != nil && created.Category.Name != "" {
 				catName = created.Category.Name
 			}
+			active := created.IsActive
 			c.JSON(http.StatusCreated, gin.H{
 				"status": "added",
 				"id":     created.ID,
@@ -615,7 +743,10 @@ func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
 					ID:          created.ID,
 					Title:       created.Name,
 					Category:    catName,
+					Description: created.Description,
 					ImageUrl:    created.ThumbnailURL,
+					Photos:      created.Photos,
+					IsActive:    &active,
 					CompletedAt: created.CreatedAt,
 				},
 			})

@@ -1,20 +1,24 @@
 package model
 
 type CounterOfferItem struct {
-	ID           string  `json:"id"`
-	Round        int     `json:"round"`
-	Author       string  `json:"author"` // "CLIENT" or "PROVIDER"
-	IsFromClient bool    `json:"is_from_client"`
-	Price        float64 `json:"price"`
-	Reason       string  `json:"reason"`
+	ID             string  `json:"id"`
+	Round          int     `json:"round"`
+	Author         string  `json:"author"` // "CLIENT" or "PROVIDER"
+	IsFromClient   bool    `json:"is_from_client"`
+	Price          float64 `json:"price"`
+	FormattedPrice string  `json:"formatted_price,omitempty"`
+	Reason         string  `json:"reason"`
 }
 
 type SolicitationItem struct {
 	ID                  string             `json:"id"`
 	ClientID            string             `json:"client_id,omitempty"`
+	ClientName          string             `json:"client_name,omitempty"`
 	ProviderID          string             `json:"provider_id,omitempty"`
 	ServiceID           string             `json:"service_id"`
 	ServiceName         string             `json:"service_name"`
+	Category            string             `json:"category,omitempty"`
+	Neighborhood        string             `json:"neighborhood,omitempty"`
 	ProviderName        string             `json:"provider_name"`
 	ProviderTitle       string             `json:"provider_title"`
 	ProviderRating      string             `json:"provider_rating"`
@@ -32,6 +36,8 @@ type SolicitationItem struct {
 	CounterOffers       []CounterOfferItem `json:"counter_offers,omitempty"`
 	Photos              []string           `json:"photos"`
 	CreatedDate         string             `json:"created_date"`
+	IsClientEvaluated   bool               `json:"is_client_evaluated,omitempty"`
+	ClientRatingGiven   int                `json:"client_rating_given,omitempty"`
 }
 
 type SolicitationStore interface {

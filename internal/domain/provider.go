@@ -21,7 +21,10 @@ type PortfolioItem struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	Category    string    `json:"category"`
+	Description string    `json:"description,omitempty"`
 	ImageUrl    string    `json:"image_url"`
+	Photos      []string  `json:"photos,omitempty"`
+	IsActive    *bool     `json:"is_active,omitempty"`
 	CompletedAt time.Time `json:"completed_at"`
 }
 

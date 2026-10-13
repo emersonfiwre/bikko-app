@@ -54,6 +54,17 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService
 				Price:            350.0,
 				ScheduledDate:    "24 de Junho às 14:00",
 				Description:      "Instalação de split de 12000 BTUs na sala de estar. Necessário furar a parede e passar tubulação.",
+				CounterOffers: []model.CounterOfferItem{
+					{
+						ID:             "co_1",
+						Round:          1,
+						Author:         "PROVIDER",
+						IsFromClient:   false,
+						Price:          350.0,
+						FormattedPrice: "350,00",
+						Reason:         "Incluso visita técnica, materiais de fixação e mão de obra.",
+					},
+				},
 				Photos: []string{
 					"https://images.pexels.com/photos/2310904/pexels-photo-2310904.jpeg",
 				},
@@ -386,15 +397,24 @@ func matchSolicitationID(itemID, targetID string) bool {
 		return true
 	}
 	alias := map[string]string{
-		"sol_1": "33333333-0000-0000-0000-000000000001",
-		"sol_2": "33333333-0000-0000-0000-000000000002",
-		"sol_3": "33333333-0000-0000-0000-000000000003",
-		"sol_4": "33333333-0000-0000-0000-000000000004",
+		"sol_1":             "33333333-0000-0000-0000-000000000001",
+		"service_encanador": "33333333-0000-0000-0000-000000000001",
+		"BKK-8492":          "33333333-0000-0000-0000-000000000001",
+		"sol_2":             "33333333-0000-0000-0000-000000000002",
+		"BKK-8493":          "33333333-0000-0000-0000-000000000002",
+		"sol_3":             "33333333-0000-0000-0000-000000000003",
+		"BKK-8494":          "33333333-0000-0000-0000-000000000003",
+		"sol_4":             "33333333-0000-0000-0000-000000000004",
 	}
-	if a, ok := alias[itemID]; ok && a == targetID {
+	aItem, okItem := alias[itemID]
+	aTarget, okTarget := alias[targetID]
+	if okItem && aItem == targetID {
 		return true
 	}
-	if a, ok := alias[targetID]; ok && a == itemID {
+	if okTarget && aTarget == itemID {
+		return true
+	}
+	if okItem && okTarget && aItem == aTarget {
 		return true
 	}
 	return false
@@ -424,9 +444,18 @@ func (ctrl *SolicitationController) SyncSolicitationInMemory(item model.Solicita
 	ctrl.solicitations = append([]model.SolicitationItem{item}, ctrl.solicitations...)
 }
 
+func formatBRLAmount(amount float64) string {
+	return strings.ReplaceAll(fmt.Sprintf("%.2f", amount), ".", ",")
+}
+
 func (ctrl *SolicitationController) ApplyProviderProposalInMemory(id, providerID string, price float64, note string, accepted bool) *model.SolicitationItem {
 	ctrl.mu.Lock()
 	defer ctrl.mu.Unlock()
+
+	reasonText := strings.TrimSpace(note)
+	if reasonText == "" {
+		reasonText = "Incluso visita técnica, desmontagem e vedação."
+	}
 
 	for i, s := range ctrl.solicitations {
 		if matchSolicitationID(s.ID, id) {
@@ -449,6 +478,31 @@ func (ctrl *SolicitationController) ApplyProviderProposalInMemory(id, providerID
 					n := strings.TrimSpace(note)
 					ctrl.solicitations[i].CounterOfferMessage = &n
 				}
+				if price > 0 {
+					if len(ctrl.solicitations[i].CounterOffers) == 0 {
+						ctrl.solicitations[i].CounterOffers = []model.CounterOfferItem{
+							{
+								ID:             "co_1",
+								Round:          1,
+								Author:         "PROVIDER",
+								IsFromClient:   false,
+								Price:          price,
+								FormattedPrice: formatBRLAmount(price),
+								Reason:         reasonText,
+							},
+						}
+					} else if len(ctrl.solicitations[i].CounterOffers) == 1 && !ctrl.solicitations[i].CounterOffers[0].IsFromClient {
+						ctrl.solicitations[i].CounterOffers[0] = model.CounterOfferItem{
+							ID:             "co_1",
+							Round:          1,
+							Author:         "PROVIDER",
+							IsFromClient:   false,
+							Price:          price,
+							FormattedPrice: formatBRLAmount(price),
+							Reason:         reasonText,
+						}
+					}
+				}
 			}
 			cp := ctrl.solicitations[i]
 			return &cp
@@ -459,6 +513,20 @@ func (ctrl *SolicitationController) ApplyProviderProposalInMemory(id, providerID
 	if accepted {
 		status = "ACTIVE"
 	}
+	var offers []model.CounterOfferItem
+	if !accepted && price > 0 {
+		offers = []model.CounterOfferItem{
+			{
+				ID:             "co_1",
+				Round:          1,
+				Author:         "PROVIDER",
+				IsFromClient:   false,
+				Price:          price,
+				FormattedPrice: formatBRLAmount(price),
+				Reason:         reasonText,
+			},
+		}
+	}
 	newItem := model.SolicitationItem{
 		ID:            id,
 		ClientID:      "11111111-0000-0000-0000-000000000099",
@@ -467,6 +535,7 @@ func (ctrl *SolicitationController) ApplyProviderProposalInMemory(id, providerID
 		ProviderName:  "Profissional Bikko",
 		Status:        status,
 		Price:         price,
+		CounterOffers: offers,
 		Photos:        []string{},
 		CreatedDate:   time.Now().Format("02/01/2006"),
 		ScheduledDate: time.Now().Format("02/01/2006 às 14:00"),
@@ -496,13 +565,15 @@ func (ctrl *SolicitationController) ApplyProviderCounterOfferInMemory(id, provid
 			ctrl.solicitations[i].CounterOfferMessage = &rCopy
 			ctrl.solicitations[i].RenegotiationCount++
 
+			roundNum := len(ctrl.solicitations[i].CounterOffers) + 1
 			ctrl.solicitations[i].CounterOffers = append(ctrl.solicitations[i].CounterOffers, model.CounterOfferItem{
-				ID:           fmt.Sprintf("co_%d", ctrl.solicitations[i].RenegotiationCount),
-				Round:        ctrl.solicitations[i].RenegotiationCount,
-				Author:       "PROVIDER",
-				IsFromClient: false,
-				Price:        counterPrice,
-				Reason:       rCopy,
+				ID:             fmt.Sprintf("co_%d", roundNum),
+				Round:          roundNum,
+				Author:         "PROVIDER",
+				IsFromClient:   false,
+				Price:          counterPrice,
+				FormattedPrice: formatBRLAmount(counterPrice),
+				Reason:         rCopy,
 			})
 
 			if ctrl.solicitations[i].RenegotiationCount >= 5 {
@@ -533,12 +604,13 @@ func (ctrl *SolicitationController) ApplyProviderCounterOfferInMemory(id, provid
 		RenegotiationCount:  1,
 		CounterOffers: []model.CounterOfferItem{
 			{
-				ID:           "co_1",
-				Round:        1,
-				Author:       "PROVIDER",
-				IsFromClient: false,
-				Price:        counterPrice,
-				Reason:       rCopy,
+				ID:             "co_1",
+				Round:          1,
+				Author:         "PROVIDER",
+				IsFromClient:   false,
+				Price:          counterPrice,
+				FormattedPrice: formatBRLAmount(counterPrice),
+				Reason:         rCopy,
 			},
 		},
 		Photos:        []string{},
@@ -672,13 +744,15 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 				if req.CounterOfferMessage != nil {
 					reason = *req.CounterOfferMessage
 				}
+				roundNum := len(ctrl.solicitations[i].CounterOffers) + 1
 				ctrl.solicitations[i].CounterOffers = append(ctrl.solicitations[i].CounterOffers, model.CounterOfferItem{
-					ID:           fmt.Sprintf("co_%d", ctrl.solicitations[i].RenegotiationCount),
-					Round:        ctrl.solicitations[i].RenegotiationCount,
-					Author:       author,
-					IsFromClient: author == "CLIENT",
-					Price:        *req.CounterOfferPrice,
-					Reason:       reason,
+					ID:             fmt.Sprintf("co_%d", roundNum),
+					Round:          roundNum,
+					Author:         author,
+					IsFromClient:   author == "CLIENT",
+					Price:          *req.CounterOfferPrice,
+					FormattedPrice: formatBRLAmount(*req.CounterOfferPrice),
+					Reason:         reason,
 				})
 
 				if ctrl.solicitations[i].RenegotiationCount >= 5 {

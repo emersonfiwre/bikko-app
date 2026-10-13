@@ -66,15 +66,23 @@ func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (
 		}
 	}
 
+	isActive := true
 	return &model.ProfileResponse{
-		ID:           id,
-		ImageProfile: "https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg",
-		Name:         "Emerson Torres",
-		Email:        "emerson@bikko.com.br",
-		Phone:        "(11) 99999-9999",
-		Rating:       "4.9",
-		TotalRatings: 18,
-		Orders:       orders,
+		ID:              id,
+		ImageProfile:    "https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg",
+		Name:            "Emerson Torres",
+		Email:           "emerson@bikko.com.br",
+		Phone:           "(11) 99999-9999",
+		Rating:          "4.9",
+		TotalRatings:    18,
+		Profession:      "Encanador & Eletricista Especializado",
+		ExperienceYears: "Mais de 5 anos",
+		Description:     "Profissional verificado com mais de 8 anos de atuação em instalações e manutenções residenciais na Grande São Paulo.",
+		LocationName:    "Pinheiros, São Paulo - SP",
+		Latitude:        -23.5615,
+		Longitude:       -46.6960,
+		IsActive:        &isActive,
+		Orders:          orders,
 	}, nil
 }
 

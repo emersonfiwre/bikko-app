@@ -39,11 +39,11 @@ func (r *SolicitationPostgresRepository) HasPool() bool {
 
 func normalizeSolicitationID(id string) string {
 	switch strings.TrimSpace(id) {
-	case "sol_1":
+	case "sol_1", "service_encanador", "BKK-8492":
 		return "33333333-0000-0000-0000-000000000001"
-	case "sol_2":
+	case "sol_2", "BKK-8493":
 		return "33333333-0000-0000-0000-000000000002"
-	case "sol_3":
+	case "sol_3", "BKK-8494":
 		return "33333333-0000-0000-0000-000000000003"
 	case "sol_4":
 		return "33333333-0000-0000-0000-000000000004"
@@ -96,6 +96,10 @@ func mapDBStatusToAppStatus(quoteStatus string, orderStatus *string, hasProposal
 	}
 }
 
+func formatBRLAmount(amount float64) string {
+	return strings.ReplaceAll(fmt.Sprintf("%.2f", amount), ".", ",")
+}
+
 func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, item *model.SolicitationItem) {
 	if !r.HasPool() || item == nil || !isValidUUID(item.ID) {
 		return
@@ -128,6 +132,7 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 	var counterOffers []model.CounterOfferItem
 	hasInitialProposal := item.Price > 0
 	round := 0
+	counterOfferCount := 0
 
 	for rows.Next() {
 		var negID, senderID, msg string
@@ -150,6 +155,7 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 		}
 
 		if isCounter {
+			counterOfferCount++
 			round++
 			author := "CLIENT"
 			if senderID == item.ProviderID {
@@ -157,12 +163,13 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 			}
 			if round <= 5 {
 				counterOffers = append(counterOffers, model.CounterOfferItem{
-					ID:           negID,
-					Round:        round,
-					Author:       author,
-					IsFromClient: author == "CLIENT",
-					Price:        proposedPrice,
-					Reason:       msg,
+					ID:             negID,
+					Round:          round,
+					Author:         author,
+					IsFromClient:   author == "CLIENT",
+					Price:          proposedPrice,
+					FormattedPrice: formatBRLAmount(proposedPrice),
+					Reason:         msg,
 				})
 			}
 			if proposedPrice > 0 {
@@ -178,12 +185,44 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 			if proposedPrice > 0 {
 				hasInitialProposal = true
 				item.Price = proposedPrice
+				round++
+				reason := strings.TrimSpace(msg)
+				if reason == "" {
+					reason = "Incluso visita técnica, desmontagem e vedação."
+				}
+				if round <= 5 {
+					counterOffers = append(counterOffers, model.CounterOfferItem{
+						ID:             negID,
+						Round:          round,
+						Author:         "PROVIDER",
+						IsFromClient:   false,
+						Price:          proposedPrice,
+						FormattedPrice: formatBRLAmount(proposedPrice),
+						Reason:         reason,
+					})
+				}
 			}
 		}
 	}
 
+	if len(counterOffers) == 0 && item.Price > 0 && (item.Status == "BUDGET_RECEIVED" || item.Status == "NEGOTIATING" || item.Status == "ACTIVE") {
+		reason := "Incluso visita técnica, desmontagem e vedação."
+		if item.CounterOfferMessage != nil && strings.TrimSpace(*item.CounterOfferMessage) != "" {
+			reason = strings.TrimSpace(*item.CounterOfferMessage)
+		}
+		counterOffers = append(counterOffers, model.CounterOfferItem{
+			ID:             "co_1",
+			Round:          1,
+			Author:         "PROVIDER",
+			IsFromClient:   false,
+			Price:          item.Price,
+			FormattedPrice: formatBRLAmount(item.Price),
+			Reason:         reason,
+		})
+	}
+
 	item.CounterOffers = counterOffers
-	item.RenegotiationCount = len(counterOffers)
+	item.RenegotiationCount = counterOfferCount
 	if item.Photos == nil {
 		item.Photos = []string{}
 	}
