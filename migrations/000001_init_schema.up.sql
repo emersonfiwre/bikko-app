@@ -13,12 +13,14 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) NOT NULL UNIQUE,
     phone VARCHAR(50),
     cpf VARCHAR(14) UNIQUE,
-    password_hash VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) DEFAULT '',
     profile_photo_url VARCHAR(512),
     rating DECIMAL(3, 2) DEFAULT 0.00,
     total_ratings INTEGER DEFAULT 0,
     is_bikker BOOLEAN DEFAULT FALSE,
     notifications_enabled BOOLEAN DEFAULT TRUE,
+    device_token VARCHAR(512) DEFAULT NULL,
+    deleted_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -110,6 +112,7 @@ CREATE TABLE IF NOT EXISTS orders (
     status order_status DEFAULT 'SCHEDULED',
     final_price DECIMAL(10, 2) NOT NULL,
     scheduled_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    technical_report VARCHAR(280),
     cancellation_reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

@@ -3,7 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"bikko-app/config"
@@ -12,9 +12,6 @@ import (
 )
 
 func NewPostgresPool(cfg *config.Config) (*pgxpool.Pool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	dsn := cfg.GetDSN()
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -25,15 +22,31 @@ func NewPostgresPool(cfg *config.Config) (*pgxpool.Pool, error) {
 	poolConfig.MinConns = 5
 	poolConfig.MaxConnIdleTime = 15 * time.Minute
 
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao criar pool pgx: %w", err)
+	var pool *pgxpool.Pool
+	var pingErr error
+
+	for attempts := 1; attempts <= 10; attempts++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		if err == nil {
+			pingErr = pool.Ping(ctx)
+			cancel()
+			if pingErr == nil {
+				slog.Info("Pool do PostgreSQL (pgx/v5) conectado com sucesso")
+				return pool, nil
+			}
+			pool.Close()
+		} else {
+			cancel()
+		}
+
+		slog.Warn("tentativa de conexão com o PostgreSQL falhou, tentando novamente",
+			slog.Int("attempt", attempts),
+			slog.Int("max_attempts", 10),
+			slog.Any("error", pingErr),
+		)
+		time.Sleep(2 * time.Second)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("falha ao pingar Postgres: %w", err)
-	}
-
-	log.Println("Pool do PostgreSQL (pgx/v5) conectado com sucesso!")
-	return pool, nil
+	return nil, fmt.Errorf("falha ao conectar e pingar Postgres após várias tentativas: %w", pingErr)
 }

@@ -1,0 +1,46 @@
+name: Go Unit Tests
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+concurrency:
+  group: go-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Run Go Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+          cache: true
+
+      - name: Download Go Dependencies
+        run: go mod download
+
+      - name: Verify Module Integrity
+        run: go mod verify
+
+      - name: Run Unit Tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload Test Coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-coverage
+          path: coverage.out
+          retention-days: 7

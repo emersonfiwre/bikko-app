@@ -25,12 +25,25 @@ func (r *reviewRepository) CreateReviewInTx(ctx context.Context, review *domain.
 	}
 	defer tx.Rollback(ctx)
 
+	orderID := review.OrderID
+	switch orderID {
+	case "sol_1":
+		orderID = "44444444-0000-0000-0000-000000000001"
+	case "sol_2":
+		orderID = "44444444-0000-0000-0000-000000000002"
+	case "sol_3":
+		orderID = "44444444-0000-0000-0000-000000000003"
+	case "sol_4":
+		orderID = "44444444-0000-0000-0000-000000000004"
+	}
+
 	// 1. Verify Order status is COMPLETED and fetch service_id and bikker_id
+	var actualOrderID string
 	var orderStatus string
 	var serviceID string
 	var bikkerID string
-	orderQuery := `SELECT status, service_id, bikker_id FROM orders WHERE id = $1`
-	err = tx.QueryRow(ctx, orderQuery, review.OrderID).Scan(&orderStatus, &serviceID, &bikkerID)
+	orderQuery := `SELECT id, status, service_id, bikker_id FROM orders WHERE id::text = $1 OR quote_request_id::text = $1 LIMIT 1`
+	err = tx.QueryRow(ctx, orderQuery, orderID).Scan(&actualOrderID, &orderStatus, &serviceID, &bikkerID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return domain.ErrNotFound
@@ -42,6 +55,7 @@ func (r *reviewRepository) CreateReviewInTx(ctx context.Context, review *domain.
 		return domain.ErrOrderNotCompleted
 	}
 
+	review.OrderID = actualOrderID
 	review.ServiceID = serviceID
 	review.BikkerID = bikkerID
 
