@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	firebaseAuth "firebase.google.com/go/v4/auth"
@@ -46,8 +47,11 @@ func (s *authService) VerifyIDToken(ctx context.Context, idToken string) (*fireb
 		return s.firebaseAuth.VerifyIDToken(ctx, idToken)
 	}
 
-	// Fallback for development / mock test when Firebase credentials are not provided
-	if strings.HasPrefix(idToken, "mock_") || idToken == "test_token" {
+	// [SECURITY AUDIT] ATENÇÃO: Aceite de token "mock_" e "test_token" é mantido exclusivamente
+	// para execução de testes automatizados e desenvolvimento local sem Firebase configurado.
+	// Em ambiente de produção (Release), deve ser estritamente desabilitado/removido.
+	isProduction := os.Getenv("ENV") == "production" || os.Getenv("GIN_MODE") == "release"
+	if !isProduction && (strings.HasPrefix(idToken, "mock_") || idToken == "test_token") {
 		return &firebaseAuth.Token{
 			UID:    "mock_firebase_uid",
 			Claims: map[string]interface{}{},

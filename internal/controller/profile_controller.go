@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http"
+	"os"
 
 	"bikko-app/internal/infrastructure/http/middleware"
 	"bikko-app/internal/service"
@@ -20,8 +21,16 @@ func NewProfileController(profileService service.ProfileService) *ProfileControl
 func (p *ProfileController) GetProfile(c *gin.Context) {
 	// Instead of query param, use the authenticated user ID injected by middleware
 	userID := middleware.GetUserID(c)
+	// [SECURITY AUDIT] ATENÇÃO: O fallback para c.Query("userId") é mantido exclusivamente
+	// para facilitar testes unitários. Em ambiente de Release/Produção, deve ser removido,
+	// exigindo estritamente autenticação via JWT (middleware.GetUserID).
+	isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
+	if userID == "" && !isProduction {
+		userID = c.Query("userId")
+	}
 	if userID == "" {
-		userID = c.Query("userId") // Fallback if no auth token is provided during transition
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
 	}
 
 	resp, err := p.profileService.GetProfile(c.Request.Context(), userID)
@@ -36,7 +45,11 @@ func (p *ProfileController) GetProfile(c *gin.Context) {
 func (p *ProfileController) DeleteAccount(c *gin.Context) {
 	// Instead of query param, use the authenticated user ID injected by middleware
 	userID := middleware.GetUserID(c)
-	if userID == "" {
+	// [SECURITY AUDIT] ATENÇÃO: O fallback para c.Query("userId") é mantido exclusivamente
+	// para facilitar testes unitários. Em ambiente de Release/Produção, deve ser removido,
+	// exigindo estritamente autenticação via JWT (middleware.GetUserID).
+	isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
+	if userID == "" && !isProduction {
 		userID = c.Query("userId")
 	}
 	if userID == "" {

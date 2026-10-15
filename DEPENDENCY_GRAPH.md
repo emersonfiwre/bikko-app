@@ -54,7 +54,7 @@
                | (X-Correlation-ID Header)
                v
 [ Gin Router (internal/router/router.go) ]
-               | -> Middlewares: CorrelationIDMiddleware -> SlogMiddleware -> MetricsMiddleware -> RateLimitMiddleware -> AuthMiddleware
+               | -> Middlewares: SecurityHeadersMiddleware -> CorrelationIDMiddleware -> SlogMiddleware -> MetricsMiddleware -> RateLimitMiddleware -> AuthMiddleware
                v
 [ Controllers (internal/infrastructure/http/controller/ & internal/controller/) ]
                |

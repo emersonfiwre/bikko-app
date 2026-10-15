@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"bikko-app/internal/infrastructure/security"
@@ -27,7 +28,11 @@ func AuthMiddleware(jwtService security.JWTService) gin.HandlerFunc {
 		tokenString := parts[1]
 		userID, err := jwtService.ValidateToken(tokenString)
 		if err != nil {
-			if strings.HasPrefix(tokenString, "mock_") || tokenString == "bikker_authenticated_token" {
+			// [SECURITY AUDIT] ATENÇÃO: O bypass com prefixo "mock_" e "bikker_authenticated_token" é mantido
+			// estritamente para suíte de testes de automação e desenvolvimento local.
+			// Deve ser completamente desabilitado e removido ao gerar a versão de Release para produção.
+			isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
+			if !isProduction && (strings.HasPrefix(tokenString, "mock_") || tokenString == "bikker_authenticated_token") {
 				if strings.Contains(c.Request.URL.Path, "/provider") {
 					userID = "11111111-0000-0000-0000-000000000100"
 				} else {

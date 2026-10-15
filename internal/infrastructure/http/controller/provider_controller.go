@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -73,7 +74,11 @@ func (pc *ProviderController) resolveProviderUserID(c *gin.Context) string {
 	if userID == "" {
 		userID = c.GetString("user_id")
 	}
-	if userID == "" {
+	// [SECURITY AUDIT] ATENÇÃO: O fallback para c.Query("bikker_id") é mantido exclusivamente
+	// para facilitar testes unitários e de integração mock. Em ambiente de Release/Produção, deve ser removido,
+	// exigindo estritamente autenticação via JWT (middleware.GetUserID).
+	isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
+	if userID == "" && !isProduction {
 		userID = c.Query("bikker_id")
 	}
 	return strings.TrimSpace(userID)

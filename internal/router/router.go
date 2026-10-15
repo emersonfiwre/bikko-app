@@ -29,6 +29,7 @@ func SetupRouter(
 ) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(middleware.SecurityHeadersMiddleware())
 
 	// Observability Middlewares (Correlation ID, Structured JSON Logging, Prometheus Metrics)
 	r.Use(middleware.CorrelationIDMiddleware())
