@@ -19,9 +19,9 @@ type Review struct {
 }
 
 type CreateReviewInput struct {
-	OrderID    string `json:"order_id" binding:"required"`
-	ReviewerID string `json:"reviewer_id" binding:"required"`
-	Rating     int    `json:"rating" binding:"required,min=1,max=5"`
+	OrderID    string `json:"order_id"`
+	ReviewerID string `json:"reviewer_id"`
+	Rating     int    `json:"rating"`
 	Comment    string `json:"comment"`
 }
 

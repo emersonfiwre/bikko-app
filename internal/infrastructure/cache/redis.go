@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -33,7 +33,7 @@ func NewRedisService(cfg *config.Config) (*RedisService, error) {
 		return nil, fmt.Errorf("falha ao conectar no Redis (%s): %w", cfg.GetRedisAddr(), err)
 	}
 
-	log.Println("Redis Client (go-redis/v9) conectado com sucesso!")
+	slog.Info("Redis Client (go-redis/v9) conectado com sucesso")
 	return &RedisService{client: client}, nil
 }
 
@@ -185,7 +185,7 @@ func (s *RedisService) GetFeatures(ctx context.Context) (map[string]bool, error)
 			"enable_dark_mode_beta":      "false",
 		}
 		if err := s.client.HSet(ctx, "bikkofy:features", defaults).Err(); err != nil {
-			log.Printf("[RedisService] Error seeding feature toggles: %v", err)
+			slog.Error("error seeding feature toggles", slog.Any("error", err))
 		}
 		res = map[string]string{
 			"enable_profile_reviews":     "false",

@@ -26,10 +26,31 @@ type CreateReviewRequest struct {
 }
 
 func (ctrl *ReviewController) CreateReview(c *gin.Context) {
-	var input domain.CreateReviewInput
-	if err := c.ShouldBindJSON(&input); err != nil {
+	var req CreateReviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if req.OrderID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "order_id é obrigatório"})
+		return
+	}
+
+	reviewerID := req.ReviewerID
+	if reviewerID == "" {
+		if uid, exists := c.Get("userID"); exists && uid != nil {
+			reviewerID = uid.(string)
+		}
+	}
+	if reviewerID == "" {
+		reviewerID = "11111111-0000-0000-0000-000000000099"
+	}
+
+	input := domain.CreateReviewInput{
+		OrderID:    req.OrderID,
+		ReviewerID: reviewerID,
+		Rating:     req.Rating,
+		Comment:    req.Comment,
 	}
 
 	ctrl.processReview(c, input)

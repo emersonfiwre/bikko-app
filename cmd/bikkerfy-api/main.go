@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
+	"os"
 
 	firebase "firebase.google.com/go/v4"
 	firebaseAuth "firebase.google.com/go/v4/auth"
@@ -29,7 +30,7 @@ func main() {
 	// 1. Initialize PostgreSQL connection pool (pgxpool)
 	pgPool, err := postgres.NewPostgresPool(cfg)
 	if err != nil {
-		log.Printf("Aviso: Não foi possível conectar ao PostgreSQL: %v. Operando com fallbacks.\n", err)
+		slog.Warn("não foi possível conectar ao PostgreSQL, operando com fallbacks", slog.Any("error", err))
 	} else {
 		defer pgPool.Close()
 		middleware.RegisterPgxPoolMetrics(pgPool)
@@ -38,13 +39,13 @@ func main() {
 	// 2. Initialize Redis service (go-redis/v9)
 	redisSvc, err := cache.NewRedisService(cfg)
 	if err != nil {
-		log.Printf("Aviso: Não foi possível conectar ao Redis: %v. Operando sem cache Redis.\n", err)
+		slog.Warn("não foi possível conectar ao Redis, operando sem cache Redis", slog.Any("error", err))
 	}
 
 	// 3. Initialize Cloudflare R2 Storage service (AWS SDK v2)
 	storageSvc, err := storage.NewStorageService(cfg)
 	if err != nil {
-		log.Printf("Aviso: Não foi possível inicializar o Cloudflare R2 Storage: %v\n", err)
+		slog.Warn("não foi possível inicializar o Cloudflare R2 Storage", slog.Any("error", err))
 	}
 
 	// 4. Repositories
@@ -68,13 +69,13 @@ func main() {
 		ProjectID: cfg.FirebaseProjectID,
 	})
 	if err != nil {
-		log.Printf("Aviso: Não foi possível inicializar o Firebase App: %v\n", err)
+		slog.Warn("não foi possível inicializar o Firebase App", slog.Any("error", err))
 	} else {
 		fbAuth, err = fbApp.Auth(context.Background())
 		if err != nil {
-			log.Printf("Aviso: Não foi possível obter o Firebase Auth Client: %v\n", err)
+			slog.Warn("não foi possível obter o Firebase Auth Client", slog.Any("error", err))
 		} else {
-			log.Printf("Firebase Auth Client inicializado com sucesso.\n")
+			slog.Info("Firebase Auth Client inicializado com sucesso")
 		}
 	}
 
@@ -127,9 +128,10 @@ func main() {
 		authMiddleware,
 	)
 
-	log.Printf("Bikkerfy API rodando no ambiente [%s] na porta :%s\n", cfg.Env, cfg.Port)
+	slog.Info("Bikkerfy API rodando", slog.String("env", cfg.Env), slog.String("port", cfg.Port))
 	if err := r.Run(":" + cfg.Port); err != nil {
-		log.Fatalf("Erro ao iniciar o servidor: %v", err)
+		slog.Error("erro ao iniciar o servidor", slog.Any("error", err))
+		os.Exit(1)
 	}
 }
 

@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"bikko-app/internal/domain"
@@ -21,14 +21,14 @@ func NewBootstrapController(redisService *cache.RedisService) *BootstrapControll
 func (b *BootstrapController) GetBootstrap(c *gin.Context) {
 	appVersion := c.GetHeader("X-App-Version")
 	platform := c.GetHeader("X-Platform")
-	log.Printf("[BootstrapController] Header received: X-App-Version='%s', X-Platform='%s'", appVersion, platform)
+	slog.Info("bootstrap request received", slog.String("app_version", appVersion), slog.String("platform", platform))
 
 	var features map[string]bool
 	if b.redisService != nil {
 		var err error
 		features, err = b.redisService.GetFeatures(c.Request.Context())
 		if err != nil {
-			log.Printf("[BootstrapController] Error fetching features: %v", err)
+			slog.Error("error fetching features from redis", slog.Any("error", err))
 		}
 	}
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -362,7 +362,10 @@ func (pc *ProviderController) handleAcceptCounterOffer(
 			"O profissional aceitou sua contraproposta! O serviço está confirmado no seu histórico de pedidos.",
 			pushData,
 		); pushErr != nil {
-			log.Printf("[ProviderController] Failed to send accepted proposal push notification: %v\n", pushErr)
+			slog.Error("failed to send accepted proposal push notification",
+				slog.String("solicitation_id", updated.ID),
+				slog.Any("error", pushErr),
+			)
 		}
 	}
 
@@ -454,7 +457,10 @@ func (pc *ProviderController) SubmitProposal(c *gin.Context) {
 				pushBody,
 				pushData,
 			); pushErr != nil {
-				log.Printf("[ProviderController] Failed to send proposal push notification: %v\n", pushErr)
+				slog.Error("failed to send proposal push notification",
+					slog.String("solicitation_id", updated.ID),
+					slog.Any("error", pushErr),
+				)
 			}
 		}
 
@@ -538,7 +544,10 @@ func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
 				fmt.Sprintf("O profissional enviou uma contraproposta de R$ %.2f para %s.", counterPrice, updated.ServiceName),
 				pushData,
 			); pushErr != nil {
-				log.Printf("[ProviderController] Failed to send counter-offer push notification: %v\n", pushErr)
+				slog.Error("failed to send counter-offer push notification",
+					slog.String("solicitation_id", updated.ID),
+					slog.Any("error", pushErr),
+				)
 			}
 		}
 
@@ -620,7 +629,10 @@ func (pc *ProviderController) RejectSolicitation(c *gin.Context) {
 			fmt.Sprintf("O profissional não pôde atender sua solicitação. Motivo: %s", reason),
 			pushData,
 		); pushErr != nil {
-			log.Printf("[ProviderController] Failed to send reject push notification: %v\n", pushErr)
+			slog.Error("failed to send reject push notification",
+				slog.String("solicitation_id", updated.ID),
+				slog.Any("error", pushErr),
+			)
 		}
 	}
 
@@ -687,7 +699,10 @@ func (pc *ProviderController) GetPortfolio(c *gin.Context) {
 
 func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
 	var req domain.PortfolioCreateRequest
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "corpo da requisição inválido: " + err.Error()})
+		return
+	}
 
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
@@ -827,6 +842,10 @@ func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 	var req domain.ClientEvaluationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Stars < 1 || req.Stars > 5 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "as estrelas devem ser entre 1 e 5"})
 		return
 	}
 	if len([]rune(req.TechnicalReport)) > 280 {

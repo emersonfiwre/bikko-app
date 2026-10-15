@@ -39,6 +39,10 @@ func (p *ProfileController) DeleteAccount(c *gin.Context) {
 	if userID == "" {
 		userID = c.Query("userId")
 	}
+	if userID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
 
 	if err := p.profileService.DeleteAccount(c.Request.Context(), userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Falha ao desativar conta: " + err.Error()})

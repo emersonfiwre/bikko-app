@@ -246,6 +246,42 @@ func TestSolicitationController_CreateSolicitation(t *testing.T) {
 			t.Errorf("expected default ServiceName, got '%s'", created.ServiceName)
 		}
 	})
+
+	t.Run("captures location and house_number and formats neighborhood", func(t *testing.T) {
+		ctrl := NewSolicitationController(nil)
+		router := setupSolicitationRouter(ctrl)
+
+		payload := map[string]interface{}{
+			"service_name": "Instalação de Chuveiro",
+			"description":  "Troca de resistência de chuveiro",
+			"location":     "Pinheiros, São Paulo - SP",
+			"house_number": "124, Apto 32B",
+		}
+		data, _ := json.Marshal(payload)
+
+		req, _ := http.NewRequest(http.MethodPost, "/solicitations", bytes.NewBuffer(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201 Created, got %d", w.Code)
+		}
+
+		var created model.SolicitationItem
+		_ = json.Unmarshal(w.Body.Bytes(), &created)
+
+		if created.Location != "Pinheiros, São Paulo - SP" {
+			t.Errorf("expected Location 'Pinheiros, São Paulo - SP', got '%s'", created.Location)
+		}
+		if created.HouseNumber != "124, Apto 32B" {
+			t.Errorf("expected HouseNumber '124, Apto 32B', got '%s'", created.HouseNumber)
+		}
+		expectedNeighborhood := "Pinheiros, São Paulo - SP, Nº 124, Apto 32B"
+		if created.Neighborhood != expectedNeighborhood {
+			t.Errorf("expected Neighborhood '%s', got '%s'", expectedNeighborhood, created.Neighborhood)
+		}
+	})
 }
 
 func TestSolicitationController_UpdateStatus(t *testing.T) {

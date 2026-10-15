@@ -77,7 +77,7 @@ type RejectRequest struct {
 type ClientEvaluationRequest struct {
 	SolicitationID  string   `json:"solicitation_id"`
 	TechnicalReport string   `json:"technical_report"`
-	Stars           int      `json:"stars" binding:"required,min=1,max=5"`
+	Stars           int      `json:"stars"`
 	Tags            []string `json:"tags"`
 	Comment         string   `json:"comment"`
 }

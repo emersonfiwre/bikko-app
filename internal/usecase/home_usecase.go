@@ -2,7 +2,8 @@ package usecase
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 
 	"bikko-app/internal/domain"
 	"bikko-app/internal/infrastructure/cache"
@@ -33,10 +34,10 @@ func (uc *HomeUseCase) GetHomeFeed(ctx context.Context, lat, lon float64, hasLoc
 	// 1. Categories (Redis Cache with 24h TTL)
 	categories, err := uc.redisService.GetCategories(ctx)
 	if err != nil {
-		log.Println("[HomeUseCase] Cache Miss: home:categories -> buscando no PostgreSQL")
+		slog.Info("cache miss on home:categories, fetching from PostgreSQL")
 		categories, err = uc.categoryRepo.GetAllActive(ctx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("home_usecase: failed to fetch categories: %w", err)
 		}
 		_ = uc.redisService.SetCategories(ctx, categories)
 	}
@@ -47,10 +48,10 @@ func (uc *HomeUseCase) GetHomeFeed(ctx context.Context, lat, lon float64, hasLoc
 		var err error
 		nearBikkers, err = uc.redisService.GetNearBikkers(ctx, lat, lon)
 		if err != nil {
-			log.Println("[HomeUseCase] Cache Miss: home:near_bikkers:{geohash} -> executando query espacial PostGIS")
+			slog.Info("cache miss on home:near_bikkers, executing PostGIS spatial query", slog.Float64("lat", lat), slog.Float64("lon", lon))
 			nearBikkers, err = uc.bikkerRepo.GetNearBikkers(ctx, lat, lon, 10)
 			if err != nil {
-				log.Printf("[HomeUseCase] Erro ao buscar bikkers por perto: %v\n", err)
+				slog.Error("erro ao buscar bikkers por perto", slog.Any("error", err))
 			} else if len(nearBikkers) > 0 {
 				_ = uc.redisService.SetNearBikkers(ctx, lat, lon, nearBikkers)
 			}
@@ -60,10 +61,10 @@ func (uc *HomeUseCase) GetHomeFeed(ctx context.Context, lat, lon float64, hasLoc
 	// 3. Advice Services (Redis Cache with 1h TTL)
 	adviceServices, err := uc.redisService.GetAdviceServices(ctx)
 	if err != nil {
-		log.Println("[HomeUseCase] Cache Miss: home:advice -> buscando serviços em destaque no PostgreSQL")
+		slog.Info("cache miss on home:advice, fetching featured services from PostgreSQL")
 		adviceServices, err = uc.serviceRepo.GetFeaturedAdviceServices(ctx, 10)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("home_usecase: failed to fetch advice services: %w", err)
 		}
 		if len(adviceServices) > 0 {
 			_ = uc.redisService.SetAdviceServices(ctx, adviceServices)
@@ -146,7 +147,7 @@ func (uc *HomeUseCase) GetCategories(ctx context.Context) ([]domain.Category, er
 	}
 	categories, err = uc.categoryRepo.GetAllActive(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("home_usecase: failed to get categories: %w", err)
 	}
 	_ = uc.redisService.SetCategories(ctx, categories)
 	return categories, nil

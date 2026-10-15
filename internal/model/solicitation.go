@@ -19,6 +19,8 @@ type SolicitationItem struct {
 	ServiceName         string             `json:"service_name"`
 	Category            string             `json:"category,omitempty"`
 	Neighborhood        string             `json:"neighborhood,omitempty"`
+	Location            string             `json:"location,omitempty"`
+	HouseNumber         string             `json:"house_number,omitempty"`
 	ProviderName        string             `json:"provider_name"`
 	ProviderTitle       string             `json:"provider_title"`
 	ProviderRating      string             `json:"provider_rating"`

@@ -3,7 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -192,6 +192,8 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 		Description   string   `json:"description" binding:"required"`
 		ScheduledDate string   `json:"scheduled_date"`
 		Photos        []string `json:"photos"`
+		Location      string   `json:"location"`
+		HouseNumber   string   `json:"house_number"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -254,12 +256,22 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 		clientID = "11111111-0000-0000-0000-000000000099"
 	}
 
+	neighborhood := ""
+	if req.Location != "" && req.HouseNumber != "" {
+		neighborhood = fmt.Sprintf("%s, Nº %s", req.Location, req.HouseNumber)
+	} else if req.Location != "" {
+		neighborhood = req.Location
+	}
+
 	newSol := model.SolicitationItem{
 		ID:                 fmt.Sprintf("sol_%d", time.Now().Unix()),
 		ClientID:           clientID,
 		ProviderID:         providerID,
 		ServiceID:          serviceID,
 		ServiceName:        name,
+		Neighborhood:       neighborhood,
+		Location:           req.Location,
+		HouseNumber:        req.HouseNumber,
 		ProviderName:       providerName,
 		ProviderTitle:      providerTitle,
 		ProviderRating:     providerRating,
@@ -300,7 +312,11 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 			fmt.Sprintf("Você recebeu um novo pedido para %s.", newSol.ServiceName),
 			pushData,
 		); err != nil {
-			log.Printf("[SolicitationController] Failed to send new solicitation push notification: %v\n", err)
+			slog.Error("failed to send new solicitation push notification",
+				slog.String("solicitation_id", newSol.ID),
+				slog.String("provider_id", newSol.ProviderID),
+				slog.Any("error", err),
+			)
 		}
 	}
 
@@ -353,7 +369,11 @@ func (ctrl *SolicitationController) dispatchStatusPush(
 			"Você recebeu uma nova oferta para a solicitação.",
 			pushData,
 		); err != nil {
-			log.Printf("[SolicitationController] Failed to send counter offer push notification: %v\n", err)
+			slog.Error("failed to send counter offer push notification",
+				slog.String("solicitation_id", s.ID),
+				slog.String("target_user_id", targetUserID),
+				slog.Any("error", err),
+			)
 		}
 	} else if status == "ACCEPTED" && targetUserID != "" {
 		pushData := map[string]string{
@@ -367,7 +387,11 @@ func (ctrl *SolicitationController) dispatchStatusPush(
 			"O serviço foi aceito e confirmado com sucesso.",
 			pushData,
 		); err != nil {
-			log.Printf("[SolicitationController] Failed to send accepted push notification: %v\n", err)
+			slog.Error("failed to send accepted push notification",
+				slog.String("solicitation_id", s.ID),
+				slog.String("target_user_id", targetUserID),
+				slog.Any("error", err),
+			)
 		}
 	} else if strings.EqualFold(status, "ACTIVE") && targetUserID != "" {
 		pushData := map[string]string{
@@ -387,7 +411,11 @@ func (ctrl *SolicitationController) dispatchStatusPush(
 			body,
 			pushData,
 		); err != nil {
-			log.Printf("[SolicitationController] Failed to send active push notification: %v\n", err)
+			slog.Error("failed to send active push notification",
+				slog.String("solicitation_id", s.ID),
+				slog.String("target_user_id", targetUserID),
+				slog.Any("error", err),
+			)
 		}
 	}
 }

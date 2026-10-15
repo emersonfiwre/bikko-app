@@ -3,7 +3,7 @@ package push
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
@@ -43,14 +43,14 @@ func (s *FirebasePushService) SendNotification(ctx context.Context, userID strin
 	}
 
 	if token == "" {
-		log.Printf("[PushService] User %s has no registered device token. Skipping push.\n", userID)
+		slog.Info("user has no registered device token, skipping push", slog.String("user_id", userID))
 		return nil
 	}
 
 	var sender messagingSender = s.sender
 	if sender == nil {
 		if s.app == nil {
-			log.Printf("[PushService] Firebase app not initialized. Skipping push to user %s (token: %s)\n", userID, token)
+			slog.Warn("firebase app not initialized, skipping push", slog.String("user_id", userID), slog.String("token", token))
 			return nil
 		}
 		client, err := s.app.Messaging(ctx)
@@ -74,6 +74,6 @@ func (s *FirebasePushService) SendNotification(ctx context.Context, userID strin
 		return fmt.Errorf("failed to send FCM notification to user %s: %w", userID, err)
 	}
 
-	log.Printf("[PushService] Successfully sent FCM message %s to user %s\n", resp, userID)
+	slog.Info("successfully sent FCM message", slog.String("fcm_id", resp), slog.String("user_id", userID))
 	return nil
 }

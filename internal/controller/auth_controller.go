@@ -92,6 +92,3 @@ func (a *AuthController) Login(c *gin.Context) {
 
 	c.JSON(http.StatusOK, resp)
 }
-
-
-

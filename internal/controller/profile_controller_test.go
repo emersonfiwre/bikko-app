@@ -188,6 +188,20 @@ func TestProfileController_DeleteAccount(t *testing.T) {
 			t.Fatalf("expected status 500, got %d", w.Code)
 		}
 	})
+
+	t.Run("returns 401 Unauthorized when userID is empty", func(t *testing.T) {
+		ctrl := NewProfileController(&fakeProfileService{})
+		router := gin.New()
+		router.DELETE("/profile", ctrl.DeleteAccount)
+
+		req, _ := http.NewRequest(http.MethodDelete, "/profile", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d", w.Code)
+		}
+	})
 }
 
 func TestProfileController_UpdateProfile(t *testing.T) {

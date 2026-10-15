@@ -2,23 +2,16 @@ package middleware
 
 import (
 	"log/slog"
-	"os"
-	"sync"
 	"time"
+
+	"bikko-app/internal/infrastructure/logger"
 
 	"github.com/gin-gonic/gin"
 )
 
-var slogInitOnce sync.Once
-
 // InitStructuredLogger configures the default slog logger to emit structured JSON to stdout.
 func InitStructuredLogger() {
-	slogInitOnce.Do(func() {
-		handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
-		})
-		slog.SetDefault(slog.New(handler))
-	})
+	logger.Init()
 }
 
 // SlogMiddleware logs every HTTP request as a structured JSON log entry with correlation_id, handler, latency, and status.

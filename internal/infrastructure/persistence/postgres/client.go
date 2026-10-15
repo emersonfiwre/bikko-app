@@ -3,7 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"bikko-app/config"
@@ -32,7 +32,7 @@ func NewPostgresPool(cfg *config.Config) (*pgxpool.Pool, error) {
 			pingErr = pool.Ping(ctx)
 			cancel()
 			if pingErr == nil {
-				log.Println("Pool do PostgreSQL (pgx/v5) conectado com sucesso!")
+				slog.Info("Pool do PostgreSQL (pgx/v5) conectado com sucesso")
 				return pool, nil
 			}
 			pool.Close()
@@ -40,7 +40,11 @@ func NewPostgresPool(cfg *config.Config) (*pgxpool.Pool, error) {
 			cancel()
 		}
 
-		log.Printf("Tentativa %d/10 de conexão com o PostgreSQL falhou: %v. Tentando novamente em 2s...\n", attempts, pingErr)
+		slog.Warn("tentativa de conexão com o PostgreSQL falhou, tentando novamente",
+			slog.Int("attempt", attempts),
+			slog.Int("max_attempts", 10),
+			slog.Any("error", pingErr),
+		)
 		time.Sleep(2 * time.Second)
 	}
 
