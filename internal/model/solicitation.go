@@ -55,6 +55,7 @@ type SolicitationItem struct {
 	Photos              []string           `json:"photos"`
 	ClientPhotos        []string           `json:"client_photos,omitempty"`
 	CreatedDate         string             `json:"created_date"`
+	IsReviewed          bool               `json:"is_reviewed,omitempty"`
 	IsClientEvaluated   bool               `json:"is_client_evaluated,omitempty"`
 	ClientEvaluated     bool               `json:"client_evaluated,omitempty"`
 	BikkerEvaluated     bool               `json:"bikker_evaluated,omitempty"`

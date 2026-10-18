@@ -111,7 +111,15 @@ func (ctrl *ReviewController) handleTargetReview(c *gin.Context) {
 func (ctrl *ReviewController) processReview(c *gin.Context, input domain.CreateReviewInput) {
 	review, err := ctrl.ratingUC.CreateReview(c.Request.Context(), input)
 	if err != nil {
-		if errors.Is(err, domain.ErrOrderNotCompleted) || errors.Is(err, domain.ErrAlreadyReviewed) || errors.Is(err, domain.ErrInvalidRating) {
+		if errors.Is(err, domain.ErrAlreadyReviewed) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "ALREADY_REVIEWED",
+				"error":   "ALREADY_REVIEWED",
+				"message": "Este serviço já foi avaliado anteriormente.",
+			})
+			return
+		}
+		if errors.Is(err, domain.ErrOrderNotCompleted) || errors.Is(err, domain.ErrInvalidRating) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}

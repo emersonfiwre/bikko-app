@@ -82,6 +82,14 @@ func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (
 			bikkerID = s.ID
 		}
 
+		catName := s.CategoryName
+		if catName == "" {
+			catName = s.Category
+		}
+		if catName == "" {
+			catName = "Serviço"
+		}
+
 		orders = append(orders, model.ProfileOrderItem{
 			ID:             s.ID,
 			Name:           s.ServiceName,
@@ -89,12 +97,13 @@ func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (
 			Thumbnail:      thumb,
 			Description:    s.Description,
 			Distance:       statusText,
+			Status:         s.Status,
 			ReviewsAverage: s.ProviderRating,
 			TotalReviews:   1,
 			BikkerID:       bikkerID,
 			Category: &model.ProfileOrderCategory{
 				ID:      "cat_" + s.ID,
-				Name:    s.ProviderName,
+				Name:    catName,
 				IconURL: s.ProviderPhotoURL,
 			},
 		})

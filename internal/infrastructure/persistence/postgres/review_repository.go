@@ -81,6 +81,24 @@ func (r *reviewRepository) CreateReviewInTx(ctx context.Context, review *domain.
 		return domain.ErrOrderNotCompleted
 	}
 
+	// Guardrail: Check if already reviewed in database
+	var alreadyEvaluated bool
+	if quoteRequestID != "" {
+		_ = tx.QueryRow(ctx, `SELECT COALESCE(client_evaluated, FALSE) FROM quote_requests WHERE id::text = $1`, quoteRequestID).Scan(&alreadyEvaluated)
+	}
+	if alreadyEvaluated {
+		return domain.ErrAlreadyReviewed
+	}
+
+	var exists bool
+	checkReviewQuery := `SELECT EXISTS(SELECT 1 FROM reviews WHERE (order_id::text = $1 OR order_id::text = $3) AND reviewer_id::text = $2)`
+	if err := tx.QueryRow(ctx, checkReviewQuery, actualOrderID, review.ReviewerID, quoteRequestID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return domain.ErrAlreadyReviewed
+	}
+
 	// If order is not yet marked COMPLETED, complete it now!
 	if orderStatus != string(domain.OrderStatusCompleted) {
 		_, _ = tx.Exec(ctx, `UPDATE orders SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP WHERE id::text = $1`, actualOrderID)
@@ -101,16 +119,6 @@ func (r *reviewRepository) CreateReviewInTx(ctx context.Context, review *domain.
 		review.ServiceID = *serviceID
 	}
 	review.BikkerID = bikkerID
-
-	// Check if already reviewed by this reviewer (or order_id)
-	var exists bool
-	checkReviewQuery := `SELECT EXISTS(SELECT 1 FROM reviews WHERE order_id::text = $1 AND reviewer_id::text = $2)`
-	if err := tx.QueryRow(ctx, checkReviewQuery, review.OrderID, review.ReviewerID).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		return domain.ErrAlreadyReviewed
-	}
 
 	// 2. Insert Review
 	var insertedID string

@@ -13,6 +13,7 @@ type ProfileOrderItem struct {
 	Thumbnail      string                `json:"thumbnail"`
 	Description    string                `json:"description"`
 	Distance       string                `json:"distance"`
+	Status         string                `json:"status,omitempty"`
 	ReviewsAverage string                `json:"reviews_average"`
 	TotalReviews   int                   `json:"total_reviews"`
 	BikkerID       string                `json:"bikker_id"`

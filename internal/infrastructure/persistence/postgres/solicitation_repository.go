@@ -196,6 +196,10 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 			if senderID == item.ProviderID {
 				author = "PROVIDER"
 			}
+			formatted := formatBRLAmount(proposedPrice)
+			if proposedPrice <= 0 {
+				formatted = "Pedido de mais informações"
+			}
 			if round <= 5 {
 				counterOffers = append(counterOffers, model.CounterOfferItem{
 					ID:             negID,
@@ -203,7 +207,7 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 					Author:         author,
 					IsFromClient:   author == "CLIENT",
 					Price:          proposedPrice,
-					FormattedPrice: formatBRLAmount(proposedPrice),
+					FormattedPrice: formatted,
 					Reason:         msg,
 				})
 			}
@@ -288,6 +292,7 @@ const solicitationBaseQuery = `
 		COALESCE(o.technical_report, qr.technical_report, ''),
 		o.cancellation_reason,
 		qr.created_at,
+		COALESCE(cu.full_name, 'Cliente'),
 		COALESCE(NULLIF(qr.contact_name, ''), cu.full_name, 'Cliente'),
 		COALESCE(cu.phone, qr.account_phone, ''),
 		COALESCE(NULLIF(qr.contact_phone, ''), cu.phone, ''),
@@ -346,7 +351,7 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 		var orderStatus *string
 		var scheduledTime time.Time
 		var createdAt time.Time
-		var clientName, accountPhone, contactPhone, clientRating, clientPhotoURL string
+		var clientAccountName, contactName, accountPhone, contactPhone, clientRating, clientPhotoURL string
 		var clientTotalRatings int
 		var locationAddress, categoryName, preferredDate string
 		var clientPhotosJSON []byte
@@ -371,7 +376,8 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 			&item.TechnicalReport,
 			&item.CancellationReason,
 			&createdAt,
-			&clientName,
+			&clientAccountName,
+			&contactName,
 			&accountPhone,
 			&contactPhone,
 			&clientRating,
@@ -391,12 +397,12 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 
 		item.ServiceTitle = item.ServiceName
 		item.InitialDescription = item.Description
-		item.ClientName = clientName
-		item.ContactName = clientName
+		item.ClientName = clientAccountName
+		item.ContactName = contactName
 		item.AccountPhone = accountPhone
 		item.ClientAccountPhone = accountPhone
 		item.ContactPhone = contactPhone
-		item.ClientPhone = contactPhone
+		item.ClientPhone = accountPhone
 		item.ClientRating = clientRating
 		item.ClientTotalRatings = clientTotalRatings
 		item.ClientPhotoURL = clientPhotoURL
@@ -409,6 +415,7 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 		item.ScheduledDate = preferredDate
 		item.ClientEvaluated = clientEvaluated
 		item.IsClientEvaluated = clientEvaluated
+		item.IsReviewed = clientEvaluated
 		item.BikkerEvaluated = bikkerEvaluated
 		item.ClientRatingGiven = clientRatingGiven
 		item.CreatedDate = createdAt.Format("02/01/2006")
@@ -464,7 +471,7 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 	var orderStatus *string
 	var scheduledTime time.Time
 	var createdAt time.Time
-	var clientName, accountPhone, contactPhone, clientRating, clientPhotoURL string
+	var clientAccountName, contactName, accountPhone, contactPhone, clientRating, clientPhotoURL string
 	var clientTotalRatings int
 	var locationAddress, categoryName, preferredDate string
 	var clientPhotosJSON []byte
@@ -489,7 +496,8 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 		&item.TechnicalReport,
 		&item.CancellationReason,
 		&createdAt,
-		&clientName,
+		&clientAccountName,
+		&contactName,
 		&accountPhone,
 		&contactPhone,
 		&clientRating,
@@ -509,12 +517,12 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 
 	item.ServiceTitle = item.ServiceName
 	item.InitialDescription = item.Description
-	item.ClientName = clientName
-	item.ContactName = clientName
+	item.ClientName = clientAccountName
+	item.ContactName = contactName
 	item.AccountPhone = accountPhone
 	item.ClientAccountPhone = accountPhone
 	item.ContactPhone = contactPhone
-	item.ClientPhone = contactPhone
+	item.ClientPhone = accountPhone
 	item.ClientRating = clientRating
 	item.ClientTotalRatings = clientTotalRatings
 	item.ClientPhotoURL = clientPhotoURL
@@ -527,6 +535,7 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 	item.ScheduledDate = preferredDate
 	item.ClientEvaluated = clientEvaluated
 	item.IsClientEvaluated = clientEvaluated
+	item.IsReviewed = clientEvaluated
 	item.BikkerEvaluated = bikkerEvaluated
 	item.ClientRatingGiven = clientRatingGiven
 	item.CreatedDate = createdAt.Format("02/01/2006")
@@ -742,7 +751,11 @@ func (r *SolicitationPostgresRepository) UpdateSolicitationStatus(ctx context.Co
 	cancellationReason := input.CancellationReason
 	cancelledBy := input.CancelledBy
 
-	if input.CounterOfferPrice != nil {
+	if input.CounterOfferPrice != nil || (input.CounterOfferMessage != nil && strings.TrimSpace(*input.CounterOfferMessage) != "") {
+		price := 0.0
+		if input.CounterOfferPrice != nil {
+			price = *input.CounterOfferPrice
+		}
 		senderID := existing.ClientID
 		if input.SenderID != nil && isValidUUID(*input.SenderID) {
 			senderID = *input.SenderID
@@ -753,12 +766,14 @@ func (r *SolicitationPostgresRepository) UpdateSolicitationStatus(ctx context.Co
 		msg := "Contraproposta enviada"
 		if input.CounterOfferMessage != nil && strings.TrimSpace(*input.CounterOfferMessage) != "" {
 			msg = strings.TrimSpace(*input.CounterOfferMessage)
+		} else if price <= 0 {
+			msg = "Pedido de mais informações"
 		}
 
 		_, err := r.pool.Exec(ctx, `
 			INSERT INTO quote_negotiations (quote_request_id, sender_id, message, proposed_price, is_counter_offer)
 			VALUES ($1::uuid, $2::uuid, $3, $4, TRUE)
-		`, quoteID, senderID, msg, *input.CounterOfferPrice)
+		`, quoteID, senderID, msg, price)
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert counter-offer: %w", err)
 		}
@@ -1120,16 +1135,21 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 		return err
 	}
 
+	if existing.BikkerEvaluated {
+		return domain.ErrAlreadyReviewed
+	}
+
 	techReport := strings.TrimSpace(req.TechnicalReport)
 
 	_, _ = r.pool.Exec(ctx, `
 		UPDATE quote_requests
 		SET status = 'ACCEPTED',
 		    bikker_evaluated = TRUE,
+		    client_rating_given = CASE WHEN $3 > 0 THEN $3 ELSE client_rating_given END,
 		    technical_report = CASE WHEN $2 <> '' THEN $2 ELSE technical_report END,
 		    updated_at = NOW()
 		WHERE id = $1::uuid
-	`, existing.ID, techReport)
+	`, existing.ID, techReport, req.Stars)
 
 	var validServiceID *string
 	if isValidUUID(existing.ServiceID) {

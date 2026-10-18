@@ -51,6 +51,7 @@ func TestMockProfileRepository_GetProfileByID(t *testing.T) {
 				{
 					ID:               "sol_pending",
 					ServiceName:      "Instalação Ar",
+					CategoryName:     "Climatização",
 					Status:           "PENDING_BUDGET",
 					Price:            250.0,
 					ProviderRating:   "4.8",
@@ -118,8 +119,8 @@ func TestMockProfileRepository_GetProfileByID(t *testing.T) {
 		if o0.Thumbnail != "https://example.com/photo1.jpg" {
 			t.Errorf("expected thumbnail from photos[0], got '%s'", o0.Thumbnail)
 		}
-		if o0.Category == nil || o0.Category.Name != "Carlos Silva" {
-			t.Errorf("expected category provider name 'Carlos Silva', got %+v", o0.Category)
+		if o0.Category == nil || o0.Category.Name != "Climatização" {
+			t.Errorf("expected category name 'Climatização', got %+v", o0.Category)
 		}
 
 		// Check order 1: BUDGET_RECEIVED

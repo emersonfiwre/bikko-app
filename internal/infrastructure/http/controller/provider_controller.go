@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -324,7 +325,7 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 			ContactName:        sol.ContactName,
 			ContactPhone:       contactPhone,
 			AccountPhone:       accountPhone,
-			ClientPhone:        contactPhone,
+			ClientPhone:        accountPhone,
 			ClientAccountPhone: accountPhone,
 			ClientRating:       clientRating,
 			ClientVerified:     true,
@@ -333,6 +334,7 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 			PreferredDate:      preferredDate,
 		},
 		"solicitation":          sol,
+		"client_name":           clientName,
 		"address":               neighborhood,
 		"location_address":      neighborhood,
 		"contact_name":          sol.ContactName,
@@ -561,8 +563,8 @@ func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
 		return
 	}
 
-	if counterPrice <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "preço da contraproposta é obrigatório"})
+	if counterPrice <= 0 && reason == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "preço da contraproposta ou mensagem com detalhes necessários é obrigatório"})
 		return
 	}
 
@@ -1029,12 +1031,21 @@ func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 	}
 
 	if pc.solRepo != nil && pc.solRepo.HasPool() && req.SolicitationID != "" {
-		_ = pc.solRepo.SubmitClientEvaluation(
+		if err := pc.solRepo.SubmitClientEvaluation(
 			c.Request.Context(),
 			req.SolicitationID,
 			pc.resolveProviderUserID(c),
 			req,
-		)
+		); err != nil {
+			if errors.Is(err, domain.ErrAlreadyReviewed) {
+				c.JSON(http.StatusConflict, gin.H{
+					"code":    "ALREADY_REVIEWED",
+					"error":   "ALREADY_REVIEWED",
+					"message": "Este cliente já foi avaliado anteriormente.",
+				})
+				return
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
