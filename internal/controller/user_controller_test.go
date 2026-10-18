@@ -53,6 +53,10 @@ func (m *mockUserRepoForController) GetDeviceToken(ctx context.Context, id strin
 	return "", errors.New("not implemented")
 }
 
+func (m *mockUserRepoForController) UpgradeToBikker(ctx context.Context, userID string, bikker *domain.Bikker) (*domain.User, error) {
+	return nil, errors.New("not implemented")
+}
+
 func setupUserRouter(ctrl *UserController, userID string) *gin.Engine {
 	r := gin.New()
 	if userID != "" {

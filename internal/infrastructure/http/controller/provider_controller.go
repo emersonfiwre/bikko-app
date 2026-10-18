@@ -125,7 +125,10 @@ func (pc *ProviderController) GetFeed(c *gin.Context) {
 
 	if pc.solRepo != nil && pc.solRepo.HasPool() {
 		leads, err := pc.solRepo.GetProviderFeed(c.Request.Context(), userID)
-		if err == nil && len(leads) > 0 {
+		if err == nil {
+			if leads == nil {
+				leads = []domain.OpportunityLead{}
+			}
 			c.JSON(http.StatusOK, leads)
 			return
 		}
@@ -149,19 +152,20 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 				Description:    "Cano estourou sob a pia da cozinha, precisa de reparo urgente.",
 				Category:       "Encanador",
 				Urgency:        "EMERGENCY",
-				Photos:         []string{"https://example.com/photo1.jpg", "https://example.com/photo1_2.jpg"},
+				Photos:         []string{},
 				PriceType:      "BUDGET_TO_NEGOTIATE",
 				DistanceKm:     2.5,
-				Neighborhood:   "Vila Mariana",
-				ClientName:     "Maria",
+				Neighborhood:   "Pinheiros, São Paulo - SP",
+				ClientName:     "Lucas Ferreira Mendes",
 				ClientVerified: true,
 				CreatedAt:      time.Now().Add(-1 * time.Hour),
+				ScheduledDate:  "O mais rápido possível",
 			},
+			"scheduled_date":        "O mais rápido possível",
 			"counter_offers":        []model.CounterOfferItem{},
 			"negotiation_count":     0,
 			"status":                "OPEN",
-			"client_rating":         "4.9",
-			"estimated_price_range": "Estimativa: R$ 130 - 180",
+			"client_rating":         "0.0",
 			"is_order_accepted":     false,
 			"is_proposal_sent":      false,
 			"show_negotiation_mode": false,
@@ -262,37 +266,86 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 	if category == "" {
 		category = "Geral"
 	}
-	neighborhood := sol.Neighborhood
+	neighborhood := sol.LocationAddress
+	if neighborhood == "" {
+		neighborhood = sol.Address
+	}
+	if neighborhood == "" {
+		neighborhood = sol.Neighborhood
+	}
 	if neighborhood == "" {
 		neighborhood = "São Paulo, SP"
 	}
 	clientName := sol.ClientName
 	if clientName == "" {
-		clientName = "Cliente Verificado"
+		clientName = sol.ContactName
 	}
+	if clientName == "" {
+		clientName = "Lucas Ferreira Mendes"
+	}
+
+	clientRating := sol.ClientRating
+	if clientRating == "" || clientRating == "0" || clientRating == "0.0" || sol.ClientTotalRatings == 0 {
+		clientRating = "0.0"
+	}
+
+	contactPhone := sol.ContactPhone
+	accountPhone := sol.AccountPhone
+	if accountPhone == "" {
+		accountPhone = sol.ClientAccountPhone
+	}
+
+	photos := sol.ClientPhotos
+	if len(photos) == 0 {
+		photos = sol.Photos
+	}
+	if photos == nil {
+		photos = []string{}
+	}
+
+	preferredDate := normalizePreferredDate(sol.ScheduledDate)
 
 	resp := gin.H{
 		"id": sol.ID,
 		"lead": domain.OpportunityLead{
-			ID:             sol.ID,
-			Title:          sol.ServiceName,
-			Description:    sol.Description,
-			Category:       category,
-			Urgency:        urgency,
-			Photos:         sol.Photos,
-			PriceType:      "BUDGET_TO_NEGOTIATE",
-			DistanceKm:     2.5,
-			Neighborhood:   neighborhood,
-			ClientName:     clientName,
-			ClientVerified: true,
-			CreatedAt:      time.Now().Add(-1 * time.Hour),
+			ID:                 sol.ID,
+			Title:              sol.ServiceName,
+			Description:        sol.Description,
+			Category:           category,
+			Urgency:            urgency,
+			Photos:             photos,
+			ClientPhotos:       photos,
+			PriceType:          "BUDGET_TO_NEGOTIATE",
+			DistanceKm:         2.5,
+			Neighborhood:       neighborhood,
+			Address:            neighborhood,
+			LocationAddress:    neighborhood,
+			ClientName:         clientName,
+			ContactName:        sol.ContactName,
+			ContactPhone:       contactPhone,
+			AccountPhone:       accountPhone,
+			ClientPhone:        contactPhone,
+			ClientAccountPhone: accountPhone,
+			ClientRating:       clientRating,
+			ClientVerified:     true,
+			CreatedAt:          time.Now().Add(-1 * time.Hour),
+			ScheduledDate:      preferredDate,
+			PreferredDate:      preferredDate,
 		},
 		"solicitation":          sol,
+		"address":               neighborhood,
+		"location_address":      neighborhood,
+		"contact_name":          sol.ContactName,
+		"contact_phone":         contactPhone,
+		"client_phone":          accountPhone,
+		"account_phone":         accountPhone,
+		"client_rating":         clientRating,
+		"scheduled_date":        preferredDate,
+		"preferred_date":        preferredDate,
 		"counter_offers":        counterOffers,
+		"counter_offer_history": counterOffers,
 		"negotiation_count":     sol.RenegotiationCount,
 		"status":                sol.Status,
-		"client_rating":         "4.9",
-		"estimated_price_range": "Estimativa: R$ 130 - 180",
 		"is_order_accepted":     isAccepted,
 		"is_proposal_sent":      isProposalSent,
 		"show_negotiation_mode": showNegotiationMode,
@@ -660,13 +713,16 @@ func (pc *ProviderController) GetPortfolio(c *gin.Context) {
 	if pc.serviceRepo != nil {
 		targetBikkerID := userID
 		if targetBikkerID == "" {
-			targetBikkerID = "11111111-0000-0000-0000-000000000100"
+			targetBikkerID = "22222222-2222-2222-2222-222222222222"
 		}
-		services, err := pc.serviceRepo.GetActiveServicesByBikkerID(c.Request.Context(), targetBikkerID)
-		if err != nil || len(services) == 0 {
-			services, err = pc.serviceRepo.GetActiveServicesByBikkerID(c.Request.Context(), "11111111-0000-0000-0000-000000000001")
+		var services []domain.Service
+		var err error
+		if allRepo, ok := pc.serviceRepo.(domain.BikkerAllServicesRepository); ok {
+			services, err = allRepo.GetServicesByBikkerID(c.Request.Context(), targetBikkerID)
+		} else {
+			services, err = pc.serviceRepo.GetActiveServicesByBikkerID(c.Request.Context(), targetBikkerID)
 		}
-		if err == nil && len(services) > 0 {
+		if err == nil {
 			items := make([]domain.PortfolioItem, 0, len(services))
 			for _, s := range services {
 				catName := "Geral"
@@ -739,6 +795,47 @@ func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
 			lon = *req.Longitude
 		}
 
+		isActive := true
+		if req.IsActive != nil {
+			isActive = *req.IsActive
+		}
+
+		if strings.TrimSpace(req.ID) != "" {
+			if updated, err := mutator.UpdateService(c.Request.Context(), &domain.Service{
+				ID:           strings.TrimSpace(req.ID),
+				BikkerID:     bikkerID,
+				CategoryID:   catInput,
+				Name:         title,
+				Description:  req.Description,
+				ThumbnailURL: imgURL,
+				Photos:       req.Photos,
+				Latitude:     lat,
+				Longitude:    lon,
+				IsActive:     isActive,
+			}); err == nil && updated != nil {
+				catName := req.Category
+				if updated.Category != nil && updated.Category.Name != "" {
+					catName = updated.Category.Name
+				}
+				active := updated.IsActive
+				c.JSON(http.StatusOK, gin.H{
+					"status": "updated",
+					"id":     updated.ID,
+					"item": domain.PortfolioItem{
+						ID:          updated.ID,
+						Title:       updated.Name,
+						Category:    catName,
+						Description: updated.Description,
+						ImageUrl:    updated.ThumbnailURL,
+						Photos:      updated.Photos,
+						IsActive:    &active,
+						CompletedAt: updated.CreatedAt,
+					},
+				})
+				return
+			}
+		}
+
 		created, err := mutator.CreateService(c.Request.Context(), &domain.Service{
 			BikkerID:     bikkerID,
 			CategoryID:   catInput,
@@ -748,7 +845,7 @@ func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
 			Photos:       req.Photos,
 			Latitude:     lat,
 			Longitude:    lon,
-			IsActive:     true,
+			IsActive:     isActive,
 		})
 		if err == nil && created != nil {
 			catName := req.Category
@@ -775,6 +872,74 @@ func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"status": "added", "id": "port-new"})
+}
+
+func (pc *ProviderController) UpdatePortfolioItem(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	var req domain.PortfolioCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "corpo da requisição inválido: " + err.Error()})
+		return
+	}
+
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = strings.TrimSpace(req.Name)
+	}
+	catInput := strings.TrimSpace(req.CategoryID)
+	if catInput == "" {
+		catInput = strings.TrimSpace(req.Category)
+	}
+	imgURL := strings.TrimSpace(req.ImageURL)
+	if imgURL == "" {
+		imgURL = strings.TrimSpace(req.ThumbnailURL)
+	}
+	if imgURL == "" && len(req.Photos) > 0 {
+		imgURL = req.Photos[0]
+	}
+
+	if mutator, ok := pc.serviceRepo.(domain.ServiceMutationRepository); ok && id != "" {
+		bikkerID := pc.resolveProviderUserID(c)
+		isActive := true
+		if req.IsActive != nil {
+			isActive = *req.IsActive
+		}
+
+		updated, err := mutator.UpdateService(c.Request.Context(), &domain.Service{
+			ID:           id,
+			BikkerID:     bikkerID,
+			CategoryID:   catInput,
+			Name:         title,
+			Description:  req.Description,
+			ThumbnailURL: imgURL,
+			Photos:       req.Photos,
+			IsActive:     isActive,
+		})
+		if err == nil && updated != nil {
+			catName := req.Category
+			if updated.Category != nil && updated.Category.Name != "" {
+				catName = updated.Category.Name
+			}
+			active := updated.IsActive
+			c.JSON(http.StatusOK, gin.H{
+				"status": "updated",
+				"id":     updated.ID,
+				"item": domain.PortfolioItem{
+					ID:          updated.ID,
+					Title:       updated.Name,
+					Category:    catName,
+					Description: updated.Description,
+					ImageUrl:    updated.ThumbnailURL,
+					Photos:      updated.Photos,
+					IsActive:    &active,
+					CompletedAt: updated.CreatedAt,
+				},
+			})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "updated", "id": id})
 }
 
 func (pc *ProviderController) DeletePortfolioItem(c *gin.Context) {
@@ -814,6 +979,7 @@ func (pc *ProviderController) UpdateProviderProfile(c *gin.Context) {
 	isActive := true
 	if req.IsActive != nil {
 		isActive = *req.IsActive
+		repository.SetMockProviderActive(*req.IsActive)
 	}
 
 	if updater, ok := pc.bikkerRepo.(domain.BikkerProfileUpdater); ok {
@@ -857,6 +1023,10 @@ func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "relatório técnico deve ter no máximo 280 caracteres"})
 		return
 	}
+	if len([]rune(req.Comment)) > 120 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "comentário deve ter no máximo 120 caracteres"})
+		return
+	}
 
 	if pc.solRepo != nil && pc.solRepo.HasPool() && req.SolicitationID != "" {
 		_ = pc.solRepo.SubmitClientEvaluation(
@@ -873,3 +1043,21 @@ func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 		"technical_report": req.TechnicalReport,
 	})
 }
+
+var validDropDownDates = []string{
+	"O mais rápido possível",
+	"Próximos 7 dias",
+	"Próximos 15 dias",
+	"Próximos 30 dias",
+}
+
+func normalizePreferredDate(raw string) string {
+	raw = strings.TrimSpace(raw)
+	for _, d := range validDropDownDates {
+		if strings.EqualFold(raw, d) {
+			return d
+		}
+	}
+	return "O mais rápido possível"
+}
+

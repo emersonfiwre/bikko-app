@@ -34,9 +34,9 @@ func AuthMiddleware(jwtService security.JWTService) gin.HandlerFunc {
 			isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
 			if !isProduction && (strings.HasPrefix(tokenString, "mock_") || tokenString == "bikker_authenticated_token") {
 				if strings.Contains(c.Request.URL.Path, "/provider") {
-					userID = "11111111-0000-0000-0000-000000000100"
+					userID = "22222222-2222-2222-2222-222222222222"
 				} else {
-					userID = "11111111-0000-0000-0000-000000000099"
+					userID = "11111111-1111-1111-1111-111111111111"
 				}
 			} else {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})

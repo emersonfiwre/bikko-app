@@ -242,6 +242,64 @@ func (r *serviceRepository) GetActiveServicesByBikkerID(ctx context.Context, bik
 	return services, nil
 }
 
+func (r *serviceRepository) GetServicesByBikkerID(ctx context.Context, bikkerID string) ([]domain.Service, error) {
+	query := `
+		SELECT 
+			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
+			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
+			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
+			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
+			s.is_active, s.created_at, s.updated_at,
+			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active
+		FROM services s
+		INNER JOIN categories c ON c.id = s.category_id
+		WHERE (s.bikker_id::text = $1 OR s.bikker_id::text LIKE $1 || '%')
+		ORDER BY s.created_at DESC
+	`
+	rows, err := r.pool.Query(ctx, query, bikkerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var services []domain.Service
+	for rows.Next() {
+		var s domain.Service
+		var c domain.Category
+		err := rows.Scan(
+			&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
+			&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
+			&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
+		)
+		if err != nil {
+			return nil, err
+		}
+		s.Category = &c
+		services = append(services, s)
+	}
+
+	for i := range services {
+		photosQuery := `SELECT photo_url FROM service_photos WHERE service_id = $1 ORDER BY display_order ASC`
+		photoRows, err := r.pool.Query(ctx, photosQuery, services[i].ID)
+		if err == nil {
+			var photos []string
+			for photoRows.Next() {
+				var photoURL string
+				if err := photoRows.Scan(&photoURL); err == nil {
+					photos = append(photos, photoURL)
+				}
+			}
+			photoRows.Close()
+			services[i].Photos = photos
+		}
+		if len(services[i].Photos) == 0 && services[i].ThumbnailURL != "" {
+			services[i].Photos = []string{services[i].ThumbnailURL}
+		}
+	}
+
+	return services, nil
+}
+
 func (r *serviceRepository) GetServicesByCategoryID(ctx context.Context, categoryID string) ([]domain.Service, error) {
 	query := `
 		SELECT 
@@ -385,7 +443,7 @@ func (r *serviceRepository) CreateService(ctx context.Context, service *domain.S
 
 	query := `
 		INSERT INTO services (bikker_id, category_id, name, description, thumbnail_url, location_geom, is_active)
-		VALUES ($1::uuid, $2::uuid, $3, $4, NULLIF($5, ''), ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, TRUE)
+		VALUES ($1::uuid, $2::uuid, $3, $4, NULLIF($5, ''), ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, $8)
 		RETURNING id::text, created_at, updated_at
 	`
 	err := r.pool.QueryRow(ctx, query,
@@ -396,6 +454,7 @@ func (r *serviceRepository) CreateService(ctx context.Context, service *domain.S
 		thumb,
 		lon,
 		lat,
+		service.IsActive,
 	).Scan(&service.ID, &service.CreatedAt, &service.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create service: %w", err)
@@ -403,7 +462,6 @@ func (r *serviceRepository) CreateService(ctx context.Context, service *domain.S
 
 	service.CategoryID = categoryID
 	service.ThumbnailURL = thumb
-	service.IsActive = true
 
 	photos := service.Photos
 	if len(photos) == 0 && thumb != "" {
@@ -457,6 +515,7 @@ func (r *serviceRepository) UpdateService(ctx context.Context, service *domain.S
 		    description = COALESCE(NULLIF($3, ''), description),
 		    thumbnail_url = COALESCE(NULLIF($4, ''), thumbnail_url),
 		    category_id = CASE WHEN $5 <> '' THEN $5::uuid ELSE category_id END,
+		    is_active = $7,
 		    updated_at = NOW()
 		WHERE id::text = $1 AND ($6 = '' OR bikker_id::text = $6)
 	`
@@ -467,6 +526,7 @@ func (r *serviceRepository) UpdateService(ctx context.Context, service *domain.S
 		thumb,
 		categoryID,
 		service.BikkerID,
+		service.IsActive,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update service: %w", err)
@@ -495,9 +555,9 @@ func (r *serviceRepository) DeleteService(ctx context.Context, serviceID, bikker
 	if r.pool == nil {
 		return fmt.Errorf("banco de dados não inicializado")
 	}
+	_, _ = r.pool.Exec(ctx, `DELETE FROM service_photos WHERE service_id::text = $1`, serviceID)
 	query := `
-		UPDATE services
-		SET is_active = FALSE, updated_at = NOW()
+		DELETE FROM services
 		WHERE id::text = $1 AND ($2 = '' OR bikker_id::text = $2)
 	`
 	tag, err := r.pool.Exec(ctx, query, serviceID, bikkerID)

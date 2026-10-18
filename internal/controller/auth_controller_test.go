@@ -17,9 +17,10 @@ import (
 )
 
 type fakeAuthUserRepo struct {
-	byPhone *domain.User
-	byEmail *domain.User
-	create  func(ctx context.Context, user *domain.User) (*domain.User, error)
+	byPhone         *domain.User
+	byEmail         *domain.User
+	create          func(ctx context.Context, user *domain.User) (*domain.User, error)
+	upgradeToBikker func(ctx context.Context, userID string, bikker *domain.Bikker) (*domain.User, error)
 }
 
 func (f *fakeAuthUserRepo) CreateUser(ctx context.Context, user *domain.User) (*domain.User, error) {
@@ -66,6 +67,23 @@ func (f *fakeAuthUserRepo) UpdateDeviceToken(ctx context.Context, id string, tok
 
 func (f *fakeAuthUserRepo) GetDeviceToken(ctx context.Context, id string) (string, error) {
 	return "", nil
+}
+
+func (f *fakeAuthUserRepo) UpgradeToBikker(ctx context.Context, userID string, bikker *domain.Bikker) (*domain.User, error) {
+	if f.upgradeToBikker != nil {
+		return f.upgradeToBikker(ctx, userID, bikker)
+	}
+	if f.byPhone != nil && f.byPhone.ID == userID {
+		f.byPhone.IsBikker = true
+		f.byPhone.Bikker = bikker
+		return f.byPhone, nil
+	}
+	return &domain.User{
+		ID:       userID,
+		FullName: "Upgraded User",
+		IsBikker: true,
+		Bikker:   bikker,
+	}, nil
 }
 
 func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
@@ -161,3 +179,248 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 		}
 	})
 }
+
+func TestAuthController_CheckPhone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("returns 404 USER_NOT_FOUND for unregistered number", func(t *testing.T) {
+		repo := &fakeAuthUserRepo{}
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		ctrl := NewAuthController(authSvc)
+
+		r := gin.New()
+		r.POST("/auth/check-phone", ctrl.CheckPhone)
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"phone":    "11977776666",
+			"app_type": "client",
+		})
+		req, _ := http.NewRequest(http.MethodPost, "/auth/check-phone", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 Not Found, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["code"] != "USER_NOT_FOUND" || resp["exists"] != false {
+			t.Errorf("unexpected response body: %+v", resp)
+		}
+	})
+
+	t.Run("returns 200 OK for Client number on client app", func(t *testing.T) {
+		repo := &fakeAuthUserRepo{
+			byPhone: &domain.User{
+				ID:       "client-1",
+				FullName: "Cliente Teste",
+				Phone:    "11999990000",
+				IsBikker: false,
+			},
+		}
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		ctrl := NewAuthController(authSvc)
+
+		r := gin.New()
+		r.POST("/auth/check-phone", ctrl.CheckPhone)
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"phone":    "11999990000",
+			"app_type": "client",
+		})
+		req, _ := http.NewRequest(http.MethodPost, "/auth/check-phone", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["exists"] != true || resp["is_bikker"] != false {
+			t.Errorf("unexpected response body: %+v", resp)
+		}
+	})
+
+	t.Run("returns 403 CLIENT_NEEDS_BIKKER_REGISTRATION for Client number on bikker app", func(t *testing.T) {
+		repo := &fakeAuthUserRepo{
+			byPhone: &domain.User{
+				ID:       "client-1",
+				FullName: "Cliente Teste",
+				Phone:    "11999990000",
+				IsBikker: false,
+			},
+		}
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		ctrl := NewAuthController(authSvc)
+
+		r := gin.New()
+		r.POST("/auth/check-phone", ctrl.CheckPhone)
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"phone":    "11999990000",
+			"app_type": "bikker",
+		})
+		req, _ := http.NewRequest(http.MethodPost, "/auth/check-phone", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["code"] != "CLIENT_NEEDS_BIKKER_REGISTRATION" || resp["exists"] != true || resp["is_bikker"] != false {
+			t.Errorf("unexpected response body: %+v", resp)
+		}
+	})
+
+	t.Run("returns 200 OK for Bikker number on BOTH bikker and client apps", func(t *testing.T) {
+		repo := &fakeAuthUserRepo{
+			byPhone: &domain.User{
+				ID:       "bikker-1",
+				FullName: "Bikker Profissional",
+				Phone:    "11988880000",
+				IsBikker: true,
+			},
+		}
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		ctrl := NewAuthController(authSvc)
+
+		r := gin.New()
+		r.POST("/auth/check-phone", ctrl.CheckPhone)
+
+		// On bikker app
+		bodyBikker, _ := json.Marshal(map[string]interface{}{
+			"phone":    "11988880000",
+			"app_type": "bikker",
+		})
+		reqBikker, _ := http.NewRequest(http.MethodPost, "/auth/check-phone", bytes.NewBuffer(bodyBikker))
+		reqBikker.Header.Set("Content-Type", "application/json")
+		wBikker := httptest.NewRecorder()
+		r.ServeHTTP(wBikker, reqBikker)
+
+		if wBikker.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on bikker app, got %d: %s", wBikker.Code, wBikker.Body.String())
+		}
+
+		var respBikker map[string]interface{}
+		_ = json.Unmarshal(wBikker.Body.Bytes(), &respBikker)
+		if respBikker["exists"] != true || respBikker["is_bikker"] != true {
+			t.Errorf("unexpected bikker response: %+v", respBikker)
+		}
+
+		// On client app
+		bodyClient, _ := json.Marshal(map[string]interface{}{
+			"phone":    "11988880000",
+			"app_type": "client",
+		})
+		reqClient, _ := http.NewRequest(http.MethodPost, "/auth/check-phone", bytes.NewBuffer(bodyClient))
+		reqClient.Header.Set("Content-Type", "application/json")
+		wClient := httptest.NewRecorder()
+		r.ServeHTTP(wClient, reqClient)
+
+		if wClient.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on client app, got %d: %s", wClient.Code, wClient.Body.String())
+		}
+
+		var respClient map[string]interface{}
+		_ = json.Unmarshal(wClient.Body.Bytes(), &respClient)
+		if respClient["exists"] != true || respClient["is_bikker"] != true {
+			t.Errorf("unexpected client response: %+v", respClient)
+		}
+	})
+}
+
+func TestAuthController_RegisterUpgradeToBikker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("returns 201 Created and upgrades existing client to bikker", func(t *testing.T) {
+		repo := &fakeAuthUserRepo{
+			byPhone: &domain.User{
+				ID:       "client-existing-1",
+				FullName: "Cliente Existente",
+				Phone:    "11999990000",
+				Email:    "cliente@bikko.com",
+				IsBikker: false,
+			},
+		}
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		ctrl := NewAuthController(authSvc)
+
+		r := gin.New()
+		r.POST("/auth/register", ctrl.Register)
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"full_name":        "Cliente Existente",
+			"phone":            "11999990000",
+			"is_bikker":        true,
+			"profession":       "Pintor Profissional",
+			"experience_years": "5 anos",
+			"description":      "Serviços de pintura e acabamento",
+			"location_name":    "São Paulo, SP",
+		})
+		req, _ := http.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		userMap, ok := resp["user"].(map[string]interface{})
+		if !ok || userMap["is_bikker"] != true {
+			t.Errorf("expected user.is_bikker to be true, got %+v", resp)
+		}
+	})
+}
+
+func TestAuthController_Login(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("returns 403 CLIENT_NEEDS_BIKKER_REGISTRATION when client logs into bikker app", func(t *testing.T) {
+		repo := &fakeAuthUserRepo{
+			byPhone: &domain.User{
+				ID:       "client-1",
+				FullName: "Cliente Somente",
+				Phone:    "11999990000",
+				IsBikker: false,
+			},
+		}
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		ctrl := NewAuthController(authSvc)
+
+		r := gin.New()
+		r.POST("/auth/login", ctrl.Login)
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"id_token": "test_token",
+			"phone":    "11999990000",
+			"app_type": "bikker",
+		})
+		req, _ := http.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["code"] != "CLIENT_NEEDS_BIKKER_REGISTRATION" {
+			t.Errorf("expected code CLIENT_NEEDS_BIKKER_REGISTRATION, got %+v", resp)
+		}
+	})
+}
+

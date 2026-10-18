@@ -75,6 +75,7 @@ func SetupRouter(
 		// Auth Group
 		auth := v1.Group("/auth")
 		{
+			auth.POST("/check-phone", authCtrl.CheckPhone)
 			auth.POST("/register", authCtrl.Register)
 			auth.POST("/login", authCtrl.Login)
 		}
@@ -94,6 +95,7 @@ func SetupRouter(
 			provider.POST("/solicitations/:id/reject", providerCtrl.RejectSolicitation)
 			provider.GET("/portfolio", providerCtrl.GetPortfolio)
 			provider.POST("/portfolio", providerCtrl.AddPortfolioItem)
+			provider.PUT("/portfolio/:id", providerCtrl.UpdatePortfolioItem)
 			provider.DELETE("/portfolio/:id", providerCtrl.DeletePortfolioItem)
 			provider.PUT("/profile", providerCtrl.UpdateProviderProfile)
 			provider.POST("/evaluations", providerCtrl.SubmitClientEvaluation)

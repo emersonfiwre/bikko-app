@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"os"
 
@@ -69,9 +70,10 @@ func (p *ProfileController) DeleteAccount(c *gin.Context) {
 }
 
 type UpdateProfileRequest struct {
-	Name  string `json:"name" binding:"required"`
-	Email string `json:"email" binding:"required,email"`
-	Phone string `json:"phone"`
+	Name          string `json:"name" binding:"required"`
+	Email         string `json:"email" binding:"required,email"`
+	Phone         string `json:"phone"`
+	FirebaseToken string `json:"firebase_token"`
 }
 
 func (p *ProfileController) UpdateProfile(c *gin.Context) {
@@ -87,15 +89,34 @@ func (p *ProfileController) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	if err := p.profileService.UpdateProfile(c.Request.Context(), userID, req.Name, req.Email, req.Phone); err != nil {
+	newToken, err := p.profileService.UpdateProfileWithToken(c.Request.Context(), userID, req.Name, req.Email, req.Phone, req.FirebaseToken)
+	if err != nil {
+		if errors.Is(err, service.ErrPhoneChangeRequiresFirebaseToken) || errors.Is(err, service.ErrInvalidFirebaseToken) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error":   "FIREBASE_TOKEN_INVALID",
+				"message": "Autenticação do novo número via Firebase é obrigatória",
+			})
+			return
+		}
+		if errors.Is(err, service.ErrPhoneAlreadyInUse) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "PHONE_ALREADY_IN_USE",
+				"message": "Este número de telefone já está vinculado a outra conta",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile: " + err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"status":  "success",
 		"message": "Profile updated successfully",
-	})
+	}
+	if newToken != "" {
+		resp["token"] = newToken
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // UpdateProfilePhotoRequest receives the public Cloudflare R2 URL of an image

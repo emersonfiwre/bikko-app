@@ -4,6 +4,18 @@ type LoginRequest struct {
 	IDToken string `json:"id_token"`
 	Phone   string `json:"phone"`
 	Email   string `json:"email"`
+	AppType string `json:"app_type"`
+}
+
+type CheckPhoneRequest struct {
+	Phone   string `json:"phone"`
+	AppType string `json:"app_type"`
+}
+
+type CheckPhoneResponse struct {
+	Exists   bool   `json:"exists"`
+	IsBikker bool   `json:"is_bikker"`
+	Message  string `json:"message"`
 }
 
 type RegisterRequest struct {

@@ -65,3 +65,8 @@ type ServiceMutationRepository interface {
 	UpdateService(ctx context.Context, service *Service) (*Service, error)
 	DeleteService(ctx context.Context, serviceID, bikkerID string) error
 }
+
+type BikkerAllServicesRepository interface {
+	GetServicesByBikkerID(ctx context.Context, bikkerID string) ([]Service, error)
+}
+

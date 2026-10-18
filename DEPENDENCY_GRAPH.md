@@ -14,7 +14,8 @@
 | `GET` | `/api/v1/categories` | `HomeController.GetCategories` | `HomeUseCase.GetCategories` | `CategoryRepository` | `Category` | `categories`<br>Key: `home:categories` |
 | `GET` | `/api/v1/categories/:id` | `HomeController.GetCategoryByID` | `HomeUseCase.GetCategoryByID` | `CategoryRepository` | `Category` | `categories` |
 | `GET` | `/api/v1/search` | `SearchController.Search` | `SearchUseCase.Search` | `ServiceRepository`, `CategoryRepository` | `SearchResponse` | `services`, `categories` |
-| `POST` | `/api/v1/auth/register`| `AuthController.Register` | `AuthService.Register` | `UserRepository` | `User` | `users` |
+| `POST` | `/api/v1/auth/check-phone` | `AuthController.CheckPhone` | `AuthService.CheckPhone` | `UserRepository` | `CheckPhoneResponse` | `users` |
+| `POST` | `/api/v1/auth/register`| `AuthController.Register` | `AuthService.Register` | `UserRepository` (Create / Upgrade) | `User` | `users`, `bikkers` |
 | `POST` | `/api/v1/auth/login` | `AuthController.Login` | `AuthService.Login` | `UserRepository` | `User` | `users` |
 | `GET` | `/api/v1/profile` | `ProfileController.GetProfile` | `ProfileService.GetProfile` | `UserRepository` | `Profile` | `users` (JWT Protected) |
 | `PUT` | `/api/v1/profile` | `ProfileController.UpdateProfile` | `ProfileService.UpdateProfile` | `UserRepository` | `Profile` | `users` (JWT Protected) |
@@ -42,8 +43,8 @@
 | `GET` | `/api/v1/provider/portfolio` | `ProviderController.GetPortfolio` | `ServiceRepository.GetServicesByBikkerID` | `ServiceRepository` | `PortfolioItem` | `services`, `service_photos` (JWT Protected) |
 | `POST` | `/api/v1/provider/portfolio` | `ProviderController.AddPortfolioItem` | `ServiceRepository.CreateService` | `ServiceRepository` | `PortfolioItem` | `services`, `service_photos` (JWT Protected) |
 | `DELETE` | `/api/v1/provider/portfolio/:id` | `ProviderController.DeletePortfolioItem` | `ServiceRepository.DeleteService` | `ServiceRepository` | N/A | `services`, `service_photos` (JWT Protected) |
-| `PUT` | `/api/v1/provider/profile` | `ProviderController.UpdateProviderProfile` | `BikkerRepository.UpsertBikkerProfile` | `BikkerRepository` | `BikkerProfileUpdateInput` | `bikkers` (JWT Protected) |
-| `POST` | `/api/v1/provider/evaluations` | `ProviderController.SubmitClientEvaluation` | `SolicitationPostgresRepository.SubmitClientEvaluation` | `SolicitationPostgresRepository` | `ClientEvaluationRequest` | `orders.technical_report`, `users.rating` (JWT Protected) |
+| `PUT` | `/api/v1/provider/profile` | `ProviderController.UpdateProviderProfile` | `BikkerRepository.UpsertBikkerProfile` | `BikkerRepository` | `ProviderProfileUpdateRequest` | `bikkers`, `services` (Cascades `services.is_active = false` when `is_active = false`, JWT Protected) |
+| `POST` | `/api/v1/provider/evaluations` | `ProviderController.SubmitClientEvaluation` | `SolicitationPostgresRepository.SubmitClientEvaluation` | `SolicitationPostgresRepository` | `ClientEvaluationRequest` | `orders.technical_report`, `users.rating` (max 120 chars comment, JWT Protected) |
 
 ---
 
@@ -86,7 +87,7 @@
 | **Persistence** | `postgres` | `client.go`, `service_repository.go`, `category_repository.go`, `review_repository.go`, `user_repository.go`, `bikker_repository.go`, `solicitation_repository.go` | [solicitation_repository.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/persistence/postgres/solicitation_repository.go) |
 | **Cache** | `cache` | `redis.go` | [redis.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/cache/redis.go) |
 | **Cloud Storage** | `storage` | `r2.go` | [r2.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/storage/r2.go) |
-| **Database Schema** | `migrations` | `000001_init_schema.up.sql`, `000002_add_deleted_at_to_users.up.sql`, `000003_add_device_token_to_users.up.sql`, `000004_add_technical_report_to_orders.up.sql`, `000004_remove_password_hash.up.sql`, `seed_data.sql` | [000001_init_schema.up.sql](file:///Users/emersontorres/projects/bikko-app/migrations/000001_init_schema.up.sql) |
+| **Database Schema** | `migrations` | `000001_init_schema.up.sql`, `000002_add_deleted_at_to_users.up.sql`, `000003_add_device_token_to_users.up.sql`, `000004_add_technical_report_to_orders.up.sql`, `000004_remove_password_hash.up.sql`, `000005_update_categories_40.up.sql`, `seed_data.sql` | [000005_update_categories_40.up.sql](file:///Users/emersontorres/projects/bikko-app/migrations/000005_update_categories_40.up.sql) |
 | **Unit Tests** | `testing` | `profile_repository_test.go`, `profile_service_test.go`, `profile_controller_test.go`, `home_usecase_test.go`, `solicitation_controller_test.go`, `search_usecase_test.go`, `category_test.go`, `home_test.go`, `quote_test.go`, `user_test.go`, `bikker_controller_test.go`, `user_controller_test.go`, `firebase_push_service_test.go` | [firebase_push_service_test.go](file:///Users/emersontorres/projects/bikko-app/internal/infrastructure/push/firebase_push_service_test.go) |
 
 ---

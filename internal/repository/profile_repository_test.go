@@ -84,7 +84,7 @@ func TestMockProfileRepository_GetProfileByID(t *testing.T) {
 				{
 					ID:               "sol_custom",
 					ServiceName:      "Faxina",
-					Status:           "SCHEDULED",
+					Status:           "CUSTOM",
 					ScheduledDate:    "28 de Outubro às 10:00",
 					Price:            200.0,
 					ProviderRating:   "4.9",

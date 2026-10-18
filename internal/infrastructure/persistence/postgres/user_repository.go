@@ -163,6 +163,7 @@ func (r *userRepository) GetByPhone(ctx context.Context, phone string) (*domain.
 		return nil, fmt.Errorf("user not found by phone: %w", err)
 	}
 
+	r.populateBikkerIfNeeded(ctx, user)
 	return user, nil
 }
 
@@ -196,7 +197,32 @@ func (r *userRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 		return nil, fmt.Errorf("user not found or error: %w", err)
 	}
 
+	r.populateBikkerIfNeeded(ctx, user)
 	return user, nil
+}
+
+func (r *userRepository) populateBikkerIfNeeded(ctx context.Context, user *domain.User) {
+	if r.db == nil || user == nil || !user.IsBikker {
+		return
+	}
+	bikkerQuery := `
+		SELECT COALESCE(profession, ''), COALESCE(experience_years, ''), COALESCE(description, ''), COALESCE(location_name, 'São Paulo, SP'),
+		       COALESCE(ST_Y(location_geom::geometry), -23.5614), COALESCE(ST_X(location_geom::geometry), -46.6914), COALESCE(is_active, TRUE)
+		FROM bikkers
+		WHERE id = $1
+	`
+	b := &domain.Bikker{ID: user.ID}
+	if err := r.db.QueryRow(ctx, bikkerQuery, user.ID).Scan(
+		&b.Profession,
+		&b.ExperienceYears,
+		&b.Description,
+		&b.LocationName,
+		&b.Latitude,
+		&b.Longitude,
+		&b.IsActive,
+	); err == nil {
+		user.Bikker = b
+	}
 }
 
 func (r *userRepository) UpdateUser(ctx context.Context, id string, name, email, phone string) error {
@@ -304,4 +330,71 @@ func (r *userRepository) GetDeviceToken(ctx context.Context, id string) (string,
 		return "", fmt.Errorf("failed to get device token: %w", err)
 	}
 	return token, nil
+}
+
+func (r *userRepository) UpgradeToBikker(ctx context.Context, userID string, bikker *domain.Bikker) (*domain.User, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("database connection pool is not initialized")
+	}
+
+	updateUserQuery := `
+		UPDATE users 
+		SET is_bikker = TRUE, updated_at = NOW() 
+		WHERE id = $1 AND deleted_at IS NULL
+	`
+	tag, err := r.db.Exec(ctx, updateUserQuery, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upgrade user to bikker: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, fmt.Errorf("user not found or already deleted")
+	}
+
+	profession := "Prestador de Serviços"
+	expYears := "1 ano"
+	desc := ""
+	locName := "São Paulo, SP"
+	lat := -23.55052
+	lon := -46.63330
+	if bikker != nil {
+		if bikker.Profession != "" {
+			profession = bikker.Profession
+		}
+		if bikker.ExperienceYears != "" {
+			expYears = bikker.ExperienceYears
+		}
+		desc = bikker.Description
+		if bikker.LocationName != "" {
+			locName = bikker.LocationName
+		}
+		if bikker.Latitude != 0 {
+			lat = bikker.Latitude
+		}
+		if bikker.Longitude != 0 {
+			lon = bikker.Longitude
+		}
+	}
+
+	bikkerQuery := `
+		INSERT INTO bikkers (id, profession, experience_years, description, location_name, location_geom, is_active)
+		VALUES ($1, $2, $3, $4, $5, ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, TRUE)
+		ON CONFLICT (id) DO UPDATE SET
+			profession = EXCLUDED.profession,
+			experience_years = EXCLUDED.experience_years,
+			description = EXCLUDED.description,
+			location_name = EXCLUDED.location_name,
+			location_geom = EXCLUDED.location_geom,
+			is_active = TRUE,
+			updated_at = NOW()
+	`
+	if _, err := r.db.Exec(ctx, bikkerQuery, userID, profession, expYears, desc, locName, lon, lat); err != nil {
+		return nil, fmt.Errorf("failed to create or update bikker profile: %w", err)
+	}
+
+	upgradedUser, err := r.GetByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch upgraded user: %w", err)
+	}
+	upgradedUser.Bikker = bikker
+	return upgradedUser, nil
 }

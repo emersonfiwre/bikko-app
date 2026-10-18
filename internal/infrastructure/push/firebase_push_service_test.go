@@ -51,6 +51,10 @@ func (m *mockUserRepoForPush) GetDeviceToken(ctx context.Context, id string) (st
 	return m.token, nil
 }
 
+func (m *mockUserRepoForPush) UpgradeToBikker(ctx context.Context, userID string, bikker *domain.Bikker) (*domain.User, error) {
+	return nil, errors.New("not implemented")
+}
+
 type mockMessagingSender struct {
 	sendFunc func(ctx context.Context, message *messaging.Message) (string, error)
 }

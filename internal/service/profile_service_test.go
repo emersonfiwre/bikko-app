@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bikko-app/internal/domain"
+	"bikko-app/internal/infrastructure/security"
 	"bikko-app/internal/model"
 )
 
@@ -41,8 +42,9 @@ func (f *fakeUserRepository) GetByEmail(ctx context.Context, email string) (*dom
 }
 
 func (f *fakeUserRepository) GetByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	normReq := normalizePhoneDigits(phone)
 	for _, u := range f.users {
-		if u.Phone == phone {
+		if u.Phone == phone || (normReq != "" && normalizePhoneDigits(u.Phone) == normReq) {
 			return u, nil
 		}
 	}
@@ -196,8 +198,8 @@ func TestProfileService_GetProfile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
-		if resp.Rating != "N/A" {
-			t.Errorf("expected rating 'N/A', got '%s'", resp.Rating)
+		if resp.Rating != "0.0" {
+			t.Errorf("expected rating '0.0', got '%s'", resp.Rating)
 		}
 	})
 
@@ -343,6 +345,143 @@ func TestProfileService_UpdateProfile(t *testing.T) {
 	})
 }
 
+func TestProfileService_UpdateProfileWithToken(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success when phone does not change without firebase_token", func(t *testing.T) {
+		userRepo := &fakeUserRepository{
+			users: map[string]*domain.User{
+				"usr_1": {
+					ID:       "usr_1",
+					FullName: "Old Name",
+					Email:    "old@test.com",
+					Phone:    "(11) 98888-7777",
+				},
+			},
+		}
+		jwtSvc := security.NewJWTService("secret")
+		authSvc := NewAuthService(userRepo, jwtSvc, nil)
+		svc := NewProfileService(userRepo, &fakeProfileRepo{}, WithAuthAndJWT(authSvc, jwtSvc))
+
+		// Sending the same phone in unformatted digits (same 11 digits) and empty firebase_token
+		newToken, err := svc.UpdateProfileWithToken(ctx, "usr_1", "Updated Name", "updated@test.com", "11988887777", "")
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if newToken != "" {
+			t.Errorf("expected empty token when phone does not change, got %q", newToken)
+		}
+		if userRepo.users["usr_1"].FullName != "Updated Name" {
+			t.Errorf("expected FullName 'Updated Name', got %q", userRepo.users["usr_1"].FullName)
+		}
+	})
+
+	t.Run("success when phone changes with valid firebase_token returns refreshed JWT", func(t *testing.T) {
+		userRepo := &fakeUserRepository{
+			users: map[string]*domain.User{
+				"usr_1": {
+					ID:       "usr_1",
+					FullName: "Old Name",
+					Email:    "old@test.com",
+					Phone:    "(11) 98888-7777",
+				},
+			},
+		}
+		jwtSvc := security.NewJWTService("secret")
+		authSvc := NewAuthService(userRepo, jwtSvc, nil)
+		svc := NewProfileService(userRepo, &fakeProfileRepo{}, WithAuthAndJWT(authSvc, jwtSvc))
+
+		newToken, err := svc.UpdateProfileWithToken(ctx, "usr_1", "Updated Name", "updated@test.com", "(11) 99999-0000", "mock_token_123")
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if newToken == "" {
+			t.Fatal("expected non-empty refreshed JWT token when phone changes with valid token")
+		}
+
+		// Verify token is a valid JWT for usr_1
+		extractedUID, validateErr := jwtSvc.ValidateToken(newToken)
+		if validateErr != nil {
+			t.Fatalf("expected valid JWT token, got error: %v", validateErr)
+		}
+		if extractedUID != "usr_1" {
+			t.Errorf("expected extracted userID 'usr_1', got %q", extractedUID)
+		}
+		if userRepo.users["usr_1"].Phone != "(11) 99999-0000" {
+			t.Errorf("expected user phone '(11) 99999-0000', got %q", userRepo.users["usr_1"].Phone)
+		}
+	})
+
+	t.Run("returns ErrPhoneChangeRequiresFirebaseToken when phone changes without token", func(t *testing.T) {
+		userRepo := &fakeUserRepository{
+			users: map[string]*domain.User{
+				"usr_1": {
+					ID:       "usr_1",
+					FullName: "Carlos Silva",
+					Email:    "carlos@example.com",
+					Phone:    "(11) 98888-7777",
+				},
+			},
+		}
+		jwtSvc := security.NewJWTService("secret")
+		authSvc := NewAuthService(userRepo, jwtSvc, nil)
+		svc := NewProfileService(userRepo, &fakeProfileRepo{}, WithAuthAndJWT(authSvc, jwtSvc))
+
+		_, err := svc.UpdateProfileWithToken(ctx, "usr_1", "Carlos Silva", "carlos@example.com", "(11) 99999-0000", "")
+		if !errors.Is(err, ErrPhoneChangeRequiresFirebaseToken) {
+			t.Fatalf("expected ErrPhoneChangeRequiresFirebaseToken, got %v", err)
+		}
+	})
+
+	t.Run("returns ErrInvalidFirebaseToken when token is invalid", func(t *testing.T) {
+		userRepo := &fakeUserRepository{
+			users: map[string]*domain.User{
+				"usr_1": {
+					ID:       "usr_1",
+					FullName: "Carlos Silva",
+					Email:    "carlos@example.com",
+					Phone:    "(11) 98888-7777",
+				},
+			},
+		}
+		jwtSvc := security.NewJWTService("secret")
+		authSvc := NewAuthService(userRepo, jwtSvc, nil)
+		svc := NewProfileService(userRepo, &fakeProfileRepo{}, WithAuthAndJWT(authSvc, jwtSvc))
+
+		_, err := svc.UpdateProfileWithToken(ctx, "usr_1", "Carlos Silva", "carlos@example.com", "(11) 99999-0000", "invalid_token_xyz")
+		if !errors.Is(err, ErrInvalidFirebaseToken) {
+			t.Fatalf("expected ErrInvalidFirebaseToken, got %v", err)
+		}
+	})
+
+	t.Run("returns ErrPhoneAlreadyInUse when new phone is used by another user", func(t *testing.T) {
+		userRepo := &fakeUserRepository{
+			users: map[string]*domain.User{
+				"usr_1": {
+					ID:       "usr_1",
+					FullName: "Carlos Silva",
+					Email:    "carlos@example.com",
+					Phone:    "(11) 98888-7777",
+				},
+				"usr_2": {
+					ID:       "usr_2",
+					FullName: "Ana Souza",
+					Email:    "ana@example.com",
+					Phone:    "(11) 99999-0000",
+				},
+			},
+		}
+		jwtSvc := security.NewJWTService("secret")
+		authSvc := NewAuthService(userRepo, jwtSvc, nil)
+		svc := NewProfileService(userRepo, &fakeProfileRepo{}, WithAuthAndJWT(authSvc, jwtSvc))
+
+		_, err := svc.UpdateProfileWithToken(ctx, "usr_1", "Carlos Silva", "carlos@example.com", "(11) 99999-0000", "mock_token_123")
+		if !errors.Is(err, ErrPhoneAlreadyInUse) {
+			t.Fatalf("expected ErrPhoneAlreadyInUse, got %v", err)
+		}
+	})
+}
+
 func (f *fakeUserRepository) UpdateProfilePhoto(ctx context.Context, id string, photoURL string) error {
 	if f.updateErr != nil {
 		return f.updateErr
@@ -352,6 +491,18 @@ func (f *fakeUserRepository) UpdateProfilePhoto(ctx context.Context, id string, 
 		return nil
 	}
 	return errors.New("user not found")
+}
+
+func (f *fakeUserRepository) UpgradeToBikker(ctx context.Context, userID string, bikker *domain.Bikker) (*domain.User, error) {
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	if u, ok := f.users[userID]; ok {
+		u.IsBikker = true
+		u.Bikker = bikker
+		return u, nil
+	}
+	return nil, errors.New("user not found")
 }
 
 func TestProfileService_UpdateProfilePhoto(t *testing.T) {

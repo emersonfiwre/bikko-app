@@ -305,5 +305,13 @@ func (r *bikkerRepository) UpsertBikkerProfile(ctx context.Context, bikker *doma
 		return nil, fmt.Errorf("failed to upsert bikker profile: %w", err)
 	}
 
+	if !bikker.IsActive {
+		_, _ = r.pool.Exec(ctx, `
+			UPDATE services
+			SET is_active = FALSE, updated_at = NOW()
+			WHERE bikker_id = $1::uuid
+		`, bikker.ID)
+	}
+
 	return r.GetByID(ctx, bikker.ID)
 }

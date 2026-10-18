@@ -29,8 +29,43 @@ type SolicitationPostgresRepository struct {
 	pool *pgxpool.Pool
 }
 
+func (r *SolicitationPostgresRepository) runAutoMigrations() {
+	if !r.HasPool() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	stmts := []string{
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS contact_name VARCHAR(255) DEFAULT ''",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(50) DEFAULT ''",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS account_phone VARCHAR(50) DEFAULT ''",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS service_title VARCHAR(255) DEFAULT ''",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS category_name VARCHAR(255) DEFAULT ''",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS preferred_date VARCHAR(100) DEFAULT 'O mais rápido possível'",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS client_photos JSONB DEFAULT '[]'::jsonb",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS client_evaluated BOOLEAN DEFAULT FALSE",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS bikker_evaluated BOOLEAN DEFAULT FALSE",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS client_rating_given INTEGER DEFAULT 0",
+		"ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS technical_report TEXT DEFAULT ''",
+		"ALTER TABLE quote_requests ALTER COLUMN service_id DROP NOT NULL",
+		"ALTER TABLE orders ALTER COLUMN service_id DROP NOT NULL",
+		"ALTER TABLE reviews ALTER COLUMN service_id DROP NOT NULL",
+		"ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_order_id_key",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_order_reviewer ON reviews (order_id, reviewer_id)",
+	}
+
+	for _, stmt := range stmts {
+		_, _ = r.pool.Exec(ctx, stmt)
+	}
+}
+
 func NewSolicitationPostgresRepository(pool *pgxpool.Pool) *SolicitationPostgresRepository {
-	return &SolicitationPostgresRepository{pool: pool}
+	repo := &SolicitationPostgresRepository{pool: pool}
+	if pool != nil {
+		go repo.runAutoMigrations()
+	}
+	return repo
 }
 
 func (r *SolicitationPostgresRepository) HasPool() bool {
@@ -222,14 +257,58 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 	}
 
 	item.CounterOffers = counterOffers
+	item.CounterOfferHistory = counterOffers
+	item.NegotiationHistory = counterOffers
 	item.RenegotiationCount = counterOfferCount
 	if item.Photos == nil {
 		item.Photos = []string{}
 	}
+	item.ClientPhotos = item.Photos
 	if item.Status == "NEGOTIATING" && (hasInitialProposal || len(counterOffers) > 0) {
 		item.Status = "BUDGET_RECEIVED"
 	}
 }
+
+const solicitationBaseQuery = `
+	SELECT
+		qr.id::text,
+		qr.customer_id::text,
+		qr.bikker_id::text,
+		COALESCE(qr.service_id::text, ''),
+		COALESCE(NULLIF(qr.service_title, ''), s.name, 'Solicitação de Serviço'),
+		COALESCE(pu.full_name, 'Profissional Bikko'),
+		COALESCE(b.profession, 'Especialista'),
+		CASE WHEN COALESCE(b.total_reviews, 0) = 0 THEN '0.0' ELSE ROUND(COALESCE(b.rating, 0)::numeric, 1)::text END,
+		COALESCE(pu.profile_photo_url, COALESCE(s.thumbnail_url, '')),
+		qr.status::text,
+		o.status::text,
+		COALESCE(o.final_price, 0),
+		COALESCE(o.scheduled_date, qr.desired_date, qr.created_at),
+		COALESCE(qr.initial_description, ''),
+		COALESCE(o.technical_report, qr.technical_report, ''),
+		o.cancellation_reason,
+		qr.created_at,
+		COALESCE(NULLIF(qr.contact_name, ''), cu.full_name, 'Cliente'),
+		COALESCE(cu.phone, qr.account_phone, ''),
+		COALESCE(NULLIF(qr.contact_phone, ''), cu.phone, ''),
+		CASE WHEN COALESCE(cu.total_ratings, 0) = 0 THEN '0.0' ELSE ROUND(COALESCE(cu.rating, 0)::numeric, 1)::text END,
+		COALESCE(cu.total_ratings, 0),
+		COALESCE(cu.profile_photo_url, ''),
+		COALESCE(qr.location_address, 'São Paulo, SP'),
+		COALESCE(NULLIF(qr.category_name, ''), c.name, 'Geral'),
+		COALESCE(NULLIF(qr.preferred_date, ''), 'O mais rápido possível'),
+		COALESCE(qr.client_photos, '[]'::jsonb),
+		COALESCE(qr.client_evaluated, FALSE),
+		COALESCE(qr.bikker_evaluated, FALSE),
+		COALESCE(qr.client_rating_given, 0)
+	FROM quote_requests qr
+	LEFT JOIN orders o ON o.quote_request_id = qr.id
+	LEFT JOIN services s ON s.id = qr.service_id
+	LEFT JOIN categories c ON c.id = s.category_id
+	LEFT JOIN users pu ON pu.id = qr.bikker_id
+	LEFT JOIN bikkers b ON b.id = qr.bikker_id
+	LEFT JOIN users cu ON cu.id = qr.customer_id
+`
 
 func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Context, userID string) ([]model.SolicitationItem, error) {
 	if !r.HasPool() {
@@ -237,41 +316,24 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 	}
 
 	targetUserID := strings.TrimSpace(userID)
-	if targetUserID == "" || !isValidUUID(targetUserID) {
-		targetUserID = "11111111-0000-0000-0000-000000000099"
+	var query string
+	var args []interface{}
+
+	if targetUserID != "" && isValidUUID(targetUserID) {
+		query = solicitationBaseQuery + `
+			WHERE qr.customer_id = $1::uuid
+			   OR qr.bikker_id = $1::uuid
+			   OR EXISTS (SELECT 1 FROM quote_negotiations qn WHERE qn.quote_request_id = qr.id AND qn.sender_id = $1::uuid)
+			ORDER BY qr.created_at DESC
+		`
+		args = append(args, targetUserID)
+	} else {
+		query = solicitationBaseQuery + `
+			ORDER BY qr.created_at DESC
+		`
 	}
 
-	query := `
-		SELECT
-			qr.id::text,
-			qr.customer_id::text,
-			qr.bikker_id::text,
-			qr.service_id::text,
-			COALESCE(s.name, 'Solicitação de Serviço'),
-			COALESCE(pu.full_name, 'Profissional Bikko'),
-			COALESCE(b.profession, 'Especialista'),
-			COALESCE(ROUND(b.rating::numeric, 1)::text, '4.9'),
-			COALESCE(pu.profile_photo_url, COALESCE(s.thumbnail_url, '')),
-			qr.status::text,
-			o.status::text,
-			COALESCE(o.final_price, 0),
-			COALESCE(o.scheduled_date, qr.desired_date, qr.created_at),
-			COALESCE(qr.initial_description, ''),
-			o.technical_report,
-			o.cancellation_reason,
-			qr.created_at
-		FROM quote_requests qr
-		LEFT JOIN orders o ON o.quote_request_id = qr.id
-		LEFT JOIN services s ON s.id = qr.service_id
-		LEFT JOIN users pu ON pu.id = qr.bikker_id
-		LEFT JOIN bikkers b ON b.id = qr.bikker_id
-		WHERE qr.customer_id = $1::uuid
-		   OR qr.bikker_id = $1::uuid
-		   OR EXISTS (SELECT 1 FROM quote_negotiations qn WHERE qn.quote_request_id = qr.id AND qn.sender_id = $1::uuid)
-		ORDER BY qr.created_at DESC
-	`
-
-	rows, err := r.pool.Query(ctx, query, targetUserID)
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query solicitations: %w", err)
 	}
@@ -284,6 +346,12 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 		var orderStatus *string
 		var scheduledTime time.Time
 		var createdAt time.Time
+		var clientName, accountPhone, contactPhone, clientRating, clientPhotoURL string
+		var clientTotalRatings int
+		var locationAddress, categoryName, preferredDate string
+		var clientPhotosJSON []byte
+		var clientEvaluated, bikkerEvaluated bool
+		var clientRatingGiven int
 
 		err := rows.Scan(
 			&item.ID,
@@ -303,16 +371,55 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 			&item.TechnicalReport,
 			&item.CancellationReason,
 			&createdAt,
+			&clientName,
+			&accountPhone,
+			&contactPhone,
+			&clientRating,
+			&clientTotalRatings,
+			&clientPhotoURL,
+			&locationAddress,
+			&categoryName,
+			&preferredDate,
+			&clientPhotosJSON,
+			&clientEvaluated,
+			&bikkerEvaluated,
+			&clientRatingGiven,
 		)
 		if err != nil {
 			continue
 		}
 
-		item.ScheduledDate = scheduledTime.Format("02/01/2006 às 15:04")
+		item.ServiceTitle = item.ServiceName
+		item.InitialDescription = item.Description
+		item.ClientName = clientName
+		item.ContactName = clientName
+		item.AccountPhone = accountPhone
+		item.ClientAccountPhone = accountPhone
+		item.ContactPhone = contactPhone
+		item.ClientPhone = contactPhone
+		item.ClientRating = clientRating
+		item.ClientTotalRatings = clientTotalRatings
+		item.ClientPhotoURL = clientPhotoURL
+		item.LocationAddress = locationAddress
+		item.Address = locationAddress
+		item.Neighborhood = locationAddress
+		item.Category = categoryName
+		item.CategoryName = categoryName
+		item.PreferredDate = preferredDate
+		item.ScheduledDate = preferredDate
+		item.ClientEvaluated = clientEvaluated
+		item.IsClientEvaluated = clientEvaluated
+		item.BikkerEvaluated = bikkerEvaluated
+		item.ClientRatingGiven = clientRatingGiven
 		item.CreatedDate = createdAt.Format("02/01/2006")
-		item.Photos = []string{}
-		item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, 0)
 
+		item.Photos = []string{}
+		if len(clientPhotosJSON) > 0 {
+			_ = json.Unmarshal(clientPhotosJSON, &item.Photos)
+		}
+		item.ClientPhotos = item.Photos
+
+		item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, 0)
 		r.loadNegotiations(ctx, &item)
 		item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, item.RenegotiationCount)
 		if item.Status == "CANCELLED" {
@@ -347,30 +454,7 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 		return nil, domain.ErrNotFound
 	}
 
-	query := `
-		SELECT
-			qr.id::text,
-			qr.customer_id::text,
-			qr.bikker_id::text,
-			qr.service_id::text,
-			COALESCE(s.name, 'Solicitação de Serviço'),
-			COALESCE(pu.full_name, 'Profissional Bikko'),
-			COALESCE(b.profession, 'Especialista'),
-			COALESCE(ROUND(b.rating::numeric, 1)::text, '4.9'),
-			COALESCE(pu.profile_photo_url, COALESCE(s.thumbnail_url, '')),
-			qr.status::text,
-			o.status::text,
-			COALESCE(o.final_price, 0),
-			COALESCE(o.scheduled_date, qr.desired_date, qr.created_at),
-			COALESCE(qr.initial_description, ''),
-			o.technical_report,
-			o.cancellation_reason,
-			qr.created_at
-		FROM quote_requests qr
-		LEFT JOIN orders o ON o.quote_request_id = qr.id
-		LEFT JOIN services s ON s.id = qr.service_id
-		LEFT JOIN users pu ON pu.id = qr.bikker_id
-		LEFT JOIN bikkers b ON b.id = qr.bikker_id
+	query := solicitationBaseQuery + `
 		WHERE qr.id = $1::uuid OR o.id = $1::uuid
 		LIMIT 1
 	`
@@ -380,6 +464,12 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 	var orderStatus *string
 	var scheduledTime time.Time
 	var createdAt time.Time
+	var clientName, accountPhone, contactPhone, clientRating, clientPhotoURL string
+	var clientTotalRatings int
+	var locationAddress, categoryName, preferredDate string
+	var clientPhotosJSON []byte
+	var clientEvaluated, bikkerEvaluated bool
+	var clientRatingGiven int
 
 	err := r.pool.QueryRow(ctx, query, normID).Scan(
 		&item.ID,
@@ -399,14 +489,53 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 		&item.TechnicalReport,
 		&item.CancellationReason,
 		&createdAt,
+		&clientName,
+		&accountPhone,
+		&contactPhone,
+		&clientRating,
+		&clientTotalRatings,
+		&clientPhotoURL,
+		&locationAddress,
+		&categoryName,
+		&preferredDate,
+		&clientPhotosJSON,
+		&clientEvaluated,
+		&bikkerEvaluated,
+		&clientRatingGiven,
 	)
 	if err != nil {
 		return nil, domain.ErrNotFound
 	}
 
-	item.ScheduledDate = scheduledTime.Format("02/01/2006 às 15:04")
+	item.ServiceTitle = item.ServiceName
+	item.InitialDescription = item.Description
+	item.ClientName = clientName
+	item.ContactName = clientName
+	item.AccountPhone = accountPhone
+	item.ClientAccountPhone = accountPhone
+	item.ContactPhone = contactPhone
+	item.ClientPhone = contactPhone
+	item.ClientRating = clientRating
+	item.ClientTotalRatings = clientTotalRatings
+	item.ClientPhotoURL = clientPhotoURL
+	item.LocationAddress = locationAddress
+	item.Address = locationAddress
+	item.Neighborhood = locationAddress
+	item.Category = categoryName
+	item.CategoryName = categoryName
+	item.PreferredDate = preferredDate
+	item.ScheduledDate = preferredDate
+	item.ClientEvaluated = clientEvaluated
+	item.IsClientEvaluated = clientEvaluated
+	item.BikkerEvaluated = bikkerEvaluated
+	item.ClientRatingGiven = clientRatingGiven
 	item.CreatedDate = createdAt.Format("02/01/2006")
+
 	item.Photos = []string{}
+	if len(clientPhotosJSON) > 0 {
+		_ = json.Unmarshal(clientPhotosJSON, &item.Photos)
+	}
+	item.ClientPhotos = item.Photos
 
 	r.loadNegotiations(ctx, &item)
 	item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, item.RenegotiationCount)
@@ -431,59 +560,142 @@ func (r *SolicitationPostgresRepository) CreateSolicitation(ctx context.Context,
 		return nil, fmt.Errorf("database pool not initialized")
 	}
 
-	customerID := item.ClientID
+	customerID := strings.TrimSpace(item.ClientID)
+	var customerName, customerPhone, customerPhotoURL string
+	var customerRating float64
+	var customerTotalRatings int
+
+	if isValidUUID(customerID) {
+		_ = r.pool.QueryRow(ctx, `
+			SELECT full_name, phone, rating, total_ratings, COALESCE(profile_photo_url, '')
+			FROM users WHERE id = $1::uuid
+		`, customerID).Scan(&customerName, &customerPhone, &customerRating, &customerTotalRatings, &customerPhotoURL)
+	}
+
+	if customerName == "" {
+		_ = r.pool.QueryRow(ctx, `
+			SELECT id::text, full_name, phone, rating, total_ratings, COALESCE(profile_photo_url, '')
+			FROM users ORDER BY created_at ASC LIMIT 1
+		`).Scan(&customerID, &customerName, &customerPhone, &customerRating, &customerTotalRatings, &customerPhotoURL)
+	}
+
 	if !isValidUUID(customerID) {
-		customerID = "11111111-0000-0000-0000-000000000099"
-	} else {
-		var exists bool
-		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1::uuid)`, customerID).Scan(&exists)
-		if !exists {
-			customerID = "11111111-0000-0000-0000-000000000099"
+		customerID = "11111111-1111-1111-1111-111111111111"
+	}
+
+	bikkerID := strings.TrimSpace(item.ProviderID)
+	var dbBikkerExists bool
+	if isValidUUID(bikkerID) {
+		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bikkers WHERE id = $1::uuid)`, bikkerID).Scan(&dbBikkerExists)
+	}
+	if !dbBikkerExists {
+		_ = r.pool.QueryRow(ctx, `SELECT id::text FROM bikkers WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1`).Scan(&bikkerID)
+	}
+	if !isValidUUID(bikkerID) {
+		bikkerID = "22222222-2222-2222-2222-222222222222"
+	}
+
+	var validServiceID *string
+	if isValidUUID(item.ServiceID) {
+		var sExists bool
+		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM services WHERE id = $1::uuid)`, item.ServiceID).Scan(&sExists)
+		if sExists {
+			sID := item.ServiceID
+			validServiceID = &sID
 		}
 	}
 
-	serviceID := item.ServiceID
-	bikkerID := item.ProviderID
-	if !isValidUUID(serviceID) {
-		serviceID = "22222222-0000-0000-0000-000000000001"
+	contactName := strings.TrimSpace(item.ContactName)
+	if contactName == "" {
+		contactName = strings.TrimSpace(item.ClientName)
+	}
+	if contactName == "" {
+		contactName = customerName
 	}
 
-	var dbServiceID, dbBikkerID string
-	err := r.pool.QueryRow(ctx, `
-		SELECT id::text, bikker_id::text FROM services WHERE id = $1::uuid LIMIT 1
-	`, serviceID).Scan(&dbServiceID, &dbBikkerID)
-	if err == nil {
-		serviceID = dbServiceID
-		bikkerID = dbBikkerID
-	} else {
-		err = r.pool.QueryRow(ctx, `SELECT id::text, bikker_id::text FROM services WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1`).Scan(&dbServiceID, &dbBikkerID)
-		if err == nil {
-			serviceID = dbServiceID
-			bikkerID = dbBikkerID
+	contactPhone := strings.TrimSpace(item.ContactPhone)
+	if contactPhone == "" {
+		contactPhone = strings.TrimSpace(item.ClientPhone)
+	}
+	if contactPhone == "" {
+		contactPhone = customerPhone
+	}
+	accountPhone := customerPhone
+
+	exactAddress := strings.TrimSpace(item.LocationAddress)
+	if exactAddress == "" {
+		exactAddress = strings.TrimSpace(item.Address)
+	}
+	if exactAddress == "" {
+		exactAddress = strings.TrimSpace(item.Neighborhood)
+	}
+	if exactAddress == "" {
+		exactAddress = strings.TrimSpace(item.Location)
+		if exactAddress != "" && strings.TrimSpace(item.HouseNumber) != "" {
+			exactAddress = fmt.Sprintf("%s, Nº %s", exactAddress, strings.TrimSpace(item.HouseNumber))
 		}
 	}
+	if exactAddress == "" {
+		exactAddress = "São Paulo, SP"
+	}
+
+	serviceTitle := strings.TrimSpace(item.ServiceTitle)
+	if serviceTitle == "" {
+		serviceTitle = strings.TrimSpace(item.ServiceName)
+	}
+	if serviceTitle == "" {
+		serviceTitle = "Solicitação de Serviço"
+	}
+
+	categoryName := strings.TrimSpace(item.CategoryName)
+	if categoryName == "" {
+		categoryName = strings.TrimSpace(item.Category)
+	}
+	if categoryName == "" {
+		categoryName = "Geral"
+	}
+
+	preferredDate := strings.TrimSpace(item.PreferredDate)
+	if preferredDate == "" {
+		preferredDate = strings.TrimSpace(item.ScheduledDate)
+	}
+	if preferredDate == "" {
+		preferredDate = "O mais rápido possível"
+	}
+
+	clientPhotos := item.ClientPhotos
+	if len(clientPhotos) == 0 && len(item.Photos) > 0 {
+		clientPhotos = item.Photos
+	}
+	if clientPhotos == nil {
+		clientPhotos = []string{}
+	}
+	clientPhotosJSON, _ := json.Marshal(clientPhotos)
 
 	var quoteID string
-	err = r.pool.QueryRow(ctx, `
+	err := r.pool.QueryRow(ctx, `
 		INSERT INTO quote_requests (
-			customer_id, bikker_id, service_id, status, initial_description, desired_date, location_address, location_geom
+			customer_id, bikker_id, service_id, status, initial_description, desired_date, location_address, location_geom,
+			contact_name, contact_phone, account_phone, service_title, category_name, preferred_date, client_photos
 		)
 		VALUES (
-			$1::uuid, $2::uuid, $3::uuid, 'PENDING', $4, NOW() + INTERVAL '2 days', 'São Paulo, SP',
-			ST_SetSRID(ST_MakePoint(-46.63330, -23.55052), 4326)::geography
+			$1::uuid, $2::uuid, $3, 'PENDING', $4, NOW() + INTERVAL '2 days', $5,
+			ST_SetSRID(ST_MakePoint(-46.63330, -23.55052), 4326)::geography,
+			$6, $7, $8, $9, $10, $11, $12::jsonb
 		)
 		RETURNING id::text
-	`, customerID, bikkerID, serviceID, item.Description).Scan(&quoteID)
+	`, customerID, bikkerID, validServiceID, item.Description, exactAddress,
+		contactName, contactPhone, accountPhone, serviceTitle, categoryName, preferredDate, string(clientPhotosJSON),
+	).Scan(&quoteID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert quote_request: %w", err)
 	}
 
-	if len(item.Photos) > 0 {
-		photosJSON, _ := json.Marshal(item.Photos)
+	if len(clientPhotos) > 0 {
 		_, _ = r.pool.Exec(ctx, `
 			INSERT INTO quote_negotiations (quote_request_id, sender_id, message, proposed_price, photos, is_counter_offer)
 			VALUES ($1::uuid, $2::uuid, $3, 0, $4::jsonb, FALSE)
-		`, quoteID, customerID, item.Description, string(photosJSON))
+		`, quoteID, customerID, item.Description, string(clientPhotosJSON))
 	}
 
 	created, err := r.GetSolicitationByID(ctx, quoteID)
@@ -610,35 +822,50 @@ func (r *SolicitationPostgresRepository) UpdateSolicitationStatus(ctx context.Co
 		finalPrice = *input.CounterOfferPrice
 	}
 
-	if shouldUpsertOrder || input.TechnicalReport != nil || cancellationReason != nil || input.CounterOfferPrice != nil {
-		if dbOrderStatus == "" {
-			dbOrderStatus = "SCHEDULED"
+	if shouldUpsertOrder || input.TechnicalReport != nil || cancellationReason != nil {
+		if shouldUpsertOrder && dbOrderStatus != "" {
+			var validServiceID *string
+			if isValidUUID(existing.ServiceID) {
+				var exists bool
+				_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM services WHERE id = $1::uuid)`, existing.ServiceID).Scan(&exists)
+				if exists {
+					sID := existing.ServiceID
+					validServiceID = &sID
+				}
+			}
+			_, _ = r.pool.Exec(ctx, `
+				INSERT INTO orders (
+					quote_request_id, customer_id, bikker_id, service_id, status, final_price, scheduled_date, technical_report, cancellation_reason
+				)
+				VALUES (
+					$1::uuid, $2::uuid, $3::uuid, $4, $5::order_status, $6, NOW() + INTERVAL '1 day', $7, $8
+				)
+				ON CONFLICT (quote_request_id) DO UPDATE SET
+					bikker_id = EXCLUDED.bikker_id,
+					status = EXCLUDED.status,
+					final_price = CASE WHEN $6 > 0 THEN $6 ELSE orders.final_price END,
+					technical_report = COALESCE(EXCLUDED.technical_report, orders.technical_report),
+					cancellation_reason = COALESCE(EXCLUDED.cancellation_reason, orders.cancellation_reason),
+					updated_at = NOW()
+			`,
+				quoteID,
+				existing.ClientID,
+				existing.ProviderID,
+				validServiceID,
+				dbOrderStatus,
+				finalPrice,
+				input.TechnicalReport,
+				cancellationReason,
+			)
+		} else {
+			_, _ = r.pool.Exec(ctx, `
+				UPDATE orders SET
+					technical_report = COALESCE($2, technical_report),
+					cancellation_reason = COALESCE($3, cancellation_reason),
+					updated_at = NOW()
+				WHERE quote_request_id = $1::uuid
+			`, quoteID, input.TechnicalReport, cancellationReason)
 		}
-		_, _ = r.pool.Exec(ctx, `
-			INSERT INTO orders (
-				quote_request_id, customer_id, bikker_id, service_id, status, final_price, scheduled_date, technical_report, cancellation_reason
-			)
-			VALUES (
-				$1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::order_status, $6, NOW() + INTERVAL '1 day', $7, $8
-			)
-			ON CONFLICT (quote_request_id) DO UPDATE SET
-				bikker_id = EXCLUDED.bikker_id,
-				status = CASE WHEN $9 THEN EXCLUDED.status ELSE orders.status END,
-				final_price = CASE WHEN $6 > 0 THEN $6 ELSE orders.final_price END,
-				technical_report = COALESCE(EXCLUDED.technical_report, orders.technical_report),
-				cancellation_reason = COALESCE(EXCLUDED.cancellation_reason, orders.cancellation_reason),
-				updated_at = NOW()
-		`,
-			quoteID,
-			existing.ClientID,
-			existing.ProviderID,
-			existing.ServiceID,
-			dbOrderStatus,
-			finalPrice,
-			input.TechnicalReport,
-			cancellationReason,
-			shouldUpsertOrder,
-		)
 	}
 
 	updated, err := r.GetSolicitationByID(ctx, quoteID)
@@ -663,11 +890,17 @@ func (r *SolicitationPostgresRepository) GetProviderFeed(ctx context.Context, bi
 	query := `
 		SELECT
 			qr.id::text,
-			COALESCE(s.name, 'Solicitação de Serviço') AS title,
+			COALESCE(NULLIF(qr.service_title, ''), s.name, 'Solicitação de Serviço') AS title,
 			COALESCE(qr.initial_description, '') AS description,
-			COALESCE(c.name, 'Geral') AS category,
+			COALESCE(NULLIF(qr.category_name, ''), c.name, 'Geral') AS category,
 			COALESCE(qr.location_address, 'São Paulo, SP') AS neighborhood,
-			COALESCE(cu.full_name, 'Cliente') AS client_name,
+			COALESCE(NULLIF(qr.contact_name, ''), cu.full_name, 'Cliente') AS client_name,
+			COALESCE(cu.phone, qr.account_phone, '') AS account_phone,
+			COALESCE(NULLIF(qr.contact_phone, ''), cu.phone, '') AS contact_phone,
+			COALESCE(cu.rating, 0.0) AS client_rating,
+			COALESCE(cu.total_ratings, 0) AS client_total_ratings,
+			COALESCE(NULLIF(qr.preferred_date, ''), 'O mais rápido possível') AS preferred_date,
+			COALESCE(qr.client_photos, '[]'::jsonb) AS client_photos,
 			qr.created_at,
 			COALESCE(
 				ROUND((ST_Distance(qr.location_geom, COALESCE(b.location_geom, qr.location_geom)) / 1000)::numeric, 1),
@@ -698,13 +931,25 @@ func (r *SolicitationPostgresRepository) GetProviderFeed(ctx context.Context, bi
 	var leads []domain.OpportunityLead
 	for rows.Next() {
 		var lead domain.OpportunityLead
+		var clientName, accountPhone, contactPhone string
+		var clientRatingFloat float64
+		var clientTotalRatings int
+		var preferredDate string
+		var clientPhotosJSON []byte
+
 		if err := rows.Scan(
 			&lead.ID,
 			&lead.Title,
 			&lead.Description,
 			&lead.Category,
 			&lead.Neighborhood,
-			&lead.ClientName,
+			&clientName,
+			&accountPhone,
+			&contactPhone,
+			&clientRatingFloat,
+			&clientTotalRatings,
+			&preferredDate,
+			&clientPhotosJSON,
 			&lead.CreatedAt,
 			&lead.DistanceKm,
 		); err != nil {
@@ -718,23 +963,49 @@ func (r *SolicitationPostgresRepository) GetProviderFeed(ctx context.Context, bi
 			lead.Urgency = "EMERGENCY"
 		}
 		lead.PriceType = "BUDGET_TO_NEGOTIATE"
+		lead.EstimatedValue = ""
 		lead.ClientVerified = true
-		lead.Photos = []string{}
-
-		// Load photos from quote_negotiations if any
-		var photosJSON []byte
-		if err := r.pool.QueryRow(ctx, `
-			SELECT COALESCE(photos, '[]'::jsonb) FROM quote_negotiations
-			WHERE quote_request_id = $1::uuid AND jsonb_array_length(COALESCE(photos, '[]'::jsonb)) > 0
-			ORDER BY created_at ASC LIMIT 1
-		`, lead.ID).Scan(&photosJSON); err == nil {
-			_ = json.Unmarshal(photosJSON, &lead.Photos)
+		lead.ClientName = clientName
+		lead.AccountPhone = accountPhone
+		lead.ClientAccountPhone = accountPhone
+		lead.ContactPhone = contactPhone
+		lead.ClientPhone = contactPhone
+		if clientTotalRatings == 0 || clientRatingFloat == 0 {
+			lead.ClientRating = "0.0"
+		} else {
+			lead.ClientRating = fmt.Sprintf("%.1f", clientRatingFloat)
 		}
+		lead.PreferredDate = preferredDate
+		lead.ScheduledDate = preferredDate
+		lead.ServiceTitle = lead.Title
+		lead.Address = lead.Neighborhood
+		lead.LocationAddress = lead.Neighborhood
+
+		lead.Photos = []string{}
+		if len(clientPhotosJSON) > 0 {
+			_ = json.Unmarshal(clientPhotosJSON, &lead.Photos)
+		}
+		lead.ClientPhotos = lead.Photos
+
+		negItem := model.SolicitationItem{ID: lead.ID}
+		r.loadNegotiations(ctx, &negItem)
+		for _, co := range negItem.CounterOffers {
+			lead.CounterOffers = append(lead.CounterOffers, domain.LeadCounterOffer{
+				ID:             co.ID,
+				Round:          co.Round,
+				Author:         co.Author,
+				IsFromClient:   co.IsFromClient,
+				Price:          co.Price,
+				FormattedPrice: co.FormattedPrice,
+				Reason:         co.Reason,
+			})
+		}
+		lead.CounterOfferHistory = lead.CounterOffers
+		lead.NegotiationHistory = lead.CounterOffers
 
 		leads = append(leads, lead)
 	}
 
-	// If filtering by specific bikker returned no direct leads, return general open leads in the platform
 	if len(leads) == 0 && filterID != "" {
 		return r.GetProviderFeed(ctx, "")
 	}
@@ -780,15 +1051,6 @@ func (r *SolicitationPostgresRepository) SubmitProviderProposal(ctx context.Cont
 		UPDATE quote_requests SET status = 'NEGOTIATING', updated_at = NOW() WHERE id = $1::uuid
 	`, existing.ID)
 
-	_, _ = r.pool.Exec(ctx, `
-		INSERT INTO orders (quote_request_id, customer_id, bikker_id, service_id, status, final_price, scheduled_date)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'SCHEDULED', $5, NOW() + INTERVAL '1 day')
-		ON CONFLICT (quote_request_id) DO UPDATE SET
-			bikker_id = EXCLUDED.bikker_id,
-			final_price = EXCLUDED.final_price,
-			updated_at = NOW()
-	`, existing.ID, existing.ClientID, existing.ProviderID, existing.ServiceID, price)
-
 	return r.GetSolicitationByID(ctx, existing.ID)
 }
 
@@ -820,15 +1082,25 @@ func (r *SolicitationPostgresRepository) AcceptCounterOffer(ctx context.Context,
 		return nil, fmt.Errorf("failed to accept quote_request: %w", err)
 	}
 
+	var validServiceID *string
+	if isValidUUID(existing.ServiceID) {
+		var exists bool
+		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM services WHERE id = $1::uuid)`, existing.ServiceID).Scan(&exists)
+		if exists {
+			sID := existing.ServiceID
+			validServiceID = &sID
+		}
+	}
+
 	_, _ = r.pool.Exec(ctx, `
 		INSERT INTO orders (quote_request_id, customer_id, bikker_id, service_id, status, final_price, scheduled_date)
-		VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'IN_PROGRESS', $5, NOW() + INTERVAL '1 day')
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'IN_PROGRESS', $5, NOW() + INTERVAL '1 day')
 		ON CONFLICT (quote_request_id) DO UPDATE SET
 			bikker_id = EXCLUDED.bikker_id,
 			status = 'IN_PROGRESS',
 			final_price = CASE WHEN $5 > 0 THEN $5 ELSE orders.final_price END,
 			updated_at = NOW()
-	`, existing.ID, existing.ClientID, existing.ProviderID, existing.ServiceID, finalPrice)
+	`, existing.ID, existing.ClientID, existing.ProviderID, validServiceID, finalPrice)
 
 	return r.GetSolicitationByID(ctx, existing.ID)
 }
@@ -848,12 +1120,43 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 		return err
 	}
 
-	if strings.TrimSpace(req.TechnicalReport) != "" {
-		_, _ = r.pool.Exec(ctx, `
-			UPDATE orders
-			SET technical_report = $2, updated_at = NOW()
-			WHERE quote_request_id = $1::uuid OR id = $1::uuid
-		`, existing.ID, strings.TrimSpace(req.TechnicalReport))
+	techReport := strings.TrimSpace(req.TechnicalReport)
+
+	_, _ = r.pool.Exec(ctx, `
+		UPDATE quote_requests
+		SET status = 'ACCEPTED',
+		    bikker_evaluated = TRUE,
+		    technical_report = CASE WHEN $2 <> '' THEN $2 ELSE technical_report END,
+		    updated_at = NOW()
+		WHERE id = $1::uuid
+	`, existing.ID, techReport)
+
+	var validServiceID *string
+	if isValidUUID(existing.ServiceID) {
+		var exists bool
+		_ = r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM services WHERE id = $1::uuid)`, existing.ServiceID).Scan(&exists)
+		if exists {
+			sID := existing.ServiceID
+			validServiceID = &sID
+		}
+	}
+
+	var orderID string
+	err = r.pool.QueryRow(ctx, `
+		INSERT INTO orders (
+			quote_request_id, customer_id, bikker_id, service_id, status, final_price, scheduled_date, technical_report
+		)
+		VALUES (
+			$1::uuid, $2::uuid, $3::uuid, $4, 'COMPLETED', $5, NOW(), $6
+		)
+		ON CONFLICT (quote_request_id) DO UPDATE SET
+			status = 'COMPLETED',
+			technical_report = CASE WHEN $6 <> '' THEN $6 ELSE orders.technical_report END,
+			updated_at = NOW()
+		RETURNING id::text
+	`, existing.ID, existing.ClientID, existing.ProviderID, validServiceID, existing.Price, techReport).Scan(&orderID)
+	if err != nil {
+		_ = r.pool.QueryRow(ctx, `SELECT id::text FROM orders WHERE quote_request_id = $1::uuid LIMIT 1`, existing.ID).Scan(&orderID)
 	}
 
 	if isValidUUID(existing.ClientID) && req.Stars >= 1 && req.Stars <= 5 {
@@ -866,5 +1169,40 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 		`, existing.ClientID, float64(req.Stars))
 	}
 
+	if isValidUUID(orderID) && req.Stars >= 1 && req.Stars <= 5 {
+		reviewerID := bikkerID
+		if !isValidUUID(reviewerID) {
+			reviewerID = existing.ProviderID
+		}
+		comment := strings.TrimSpace(req.Comment)
+		if comment == "" {
+			comment = techReport
+		}
+		_, _ = r.pool.Exec(ctx, `
+			INSERT INTO reviews (order_id, service_id, reviewer_id, bikker_id, rating, comment)
+			VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5, $6)
+			ON CONFLICT DO NOTHING
+		`, orderID, validServiceID, reviewerID, existing.ProviderID, req.Stars, comment)
+	}
+
 	return nil
 }
+
+func formatPreferredDate(scheduledTime time.Time) string {
+	if scheduledTime.IsZero() {
+		return "O mais rápido possível"
+	}
+	now := time.Now()
+	diff := scheduledTime.Sub(now)
+	if diff <= 24*time.Hour {
+		return "O mais rápido possível"
+	} else if diff <= 7*24*time.Hour {
+		return "Próximos 7 dias"
+	} else if diff <= 15*24*time.Hour {
+		return "Próximos 15 dias"
+	} else if diff <= 30*24*time.Hour {
+		return "Próximos 30 dias"
+	}
+	return "O mais rápido possível"
+}
+

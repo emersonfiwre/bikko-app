@@ -49,6 +49,54 @@ func (a *AuthController) Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
+func (a *AuthController) CheckPhone(c *gin.Context) {
+	var req model.CheckPhoneRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    "INVALID_REQUEST",
+			"message": "Dados inválidos: " + err.Error(),
+		})
+		return
+	}
+
+	resp, err := a.authService.CheckPhone(c.Request.Context(), req)
+	if err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":      "USER_NOT_FOUND",
+				"exists":    false,
+				"is_bikker": false,
+				"message":   "Número não encontrado. Realize seu cadastro para continuar.",
+			})
+			return
+		}
+		if errors.Is(err, service.ErrClientNeedsBikkerRegistration) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":      "CLIENT_NEEDS_BIKKER_REGISTRATION",
+				"exists":    true,
+				"is_bikker": false,
+				"message":   "Este número possui apenas cadastro de Cliente. Cadastre suas informações de Bikker para continuar.",
+			})
+			return
+		}
+		if errors.Is(err, service.ErrInvalidCredentials) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    "INVALID_CREDENTIALS",
+				"message": "Telefone inválido ou não fornecido.",
+			})
+			return
+		}
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    "CHECK_PHONE_FAILED",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 func (a *AuthController) Login(c *gin.Context) {
 	var req model.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -65,6 +113,13 @@ func (a *AuthController) Login(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    "UNCONFIRMED_EMAIL",
 				"message": "Por favor, verifique seu e-mail para confirmar sua conta antes de entrar.",
+			})
+			return
+		}
+		if errors.Is(err, service.ErrClientNeedsBikkerRegistration) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    "CLIENT_NEEDS_BIKKER_REGISTRATION",
+				"message": "Este número possui apenas cadastro de Cliente. Cadastre suas informações de Bikker para continuar.",
 			})
 			return
 		}

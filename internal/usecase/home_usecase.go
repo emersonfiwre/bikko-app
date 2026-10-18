@@ -46,29 +46,16 @@ func (uc *HomeUseCase) GetHomeFeed(ctx context.Context, lat, lon float64, hasLoc
 	var nearBikkers []domain.NearBikkerItem
 	if hasLocation {
 		var err error
-		nearBikkers, err = uc.redisService.GetNearBikkers(ctx, lat, lon)
+		nearBikkers, err = uc.bikkerRepo.GetNearBikkers(ctx, lat, lon, 10)
 		if err != nil {
-			slog.Info("cache miss on home:near_bikkers, executing PostGIS spatial query", slog.Float64("lat", lat), slog.Float64("lon", lon))
-			nearBikkers, err = uc.bikkerRepo.GetNearBikkers(ctx, lat, lon, 10)
-			if err != nil {
-				slog.Error("erro ao buscar bikkers por perto", slog.Any("error", err))
-			} else if len(nearBikkers) > 0 {
-				_ = uc.redisService.SetNearBikkers(ctx, lat, lon, nearBikkers)
-			}
+			slog.Error("erro ao buscar bikkers por perto", slog.Any("error", err))
 		}
 	}
 
-	// 3. Advice Services (Redis Cache with 1h TTL)
-	adviceServices, err := uc.redisService.GetAdviceServices(ctx)
+	// 3. Advice Services (Fresh from PostgreSQL so newly registered Bikker services appear immediately)
+	adviceServices, err := uc.serviceRepo.GetFeaturedAdviceServices(ctx, 10)
 	if err != nil {
-		slog.Info("cache miss on home:advice, fetching featured services from PostgreSQL")
-		adviceServices, err = uc.serviceRepo.GetFeaturedAdviceServices(ctx, 10)
-		if err != nil {
-			return nil, fmt.Errorf("home_usecase: failed to fetch advice services: %w", err)
-		}
-		if len(adviceServices) > 0 {
-			_ = uc.redisService.SetAdviceServices(ctx, adviceServices)
-		}
+		return nil, fmt.Errorf("home_usecase: failed to fetch advice services: %w", err)
 	}
 
 	collections := make([]domain.HomeCollection, 0)

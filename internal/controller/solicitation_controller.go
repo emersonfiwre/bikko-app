@@ -52,7 +52,7 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService
 				ProviderPhotoURL: "https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg",
 				Status:           "BUDGET_RECEIVED",
 				Price:            350.0,
-				ScheduledDate:    "24 de Junho às 14:00",
+				ScheduledDate:    "O mais rápido possível",
 				Description:      "Instalação de split de 12000 BTUs na sala de estar. Necessário furar a parede e passar tubulação.",
 				CounterOffers: []model.CounterOfferItem{
 					{
@@ -82,7 +82,7 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService
 				ProviderPhotoURL: "https://images.pexels.com/photos/614810/pexels-photo-614810.jpeg",
 				Status:           "ACTIVE",
 				Price:            850.0,
-				ScheduledDate:    "26 de Junho às 08:00",
+				ScheduledDate:    "Próximos 7 dias",
 				Description:      "Pintura de duas paredes da sala com tinta acrílica fosca. Tinta e materiais já comprados.",
 				Photos:           []string{},
 				CreatedDate:      "19 de Junho",
@@ -99,7 +99,7 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService
 				ProviderPhotoURL:   "https://images.pexels.com/photos/91227/pexels-photo-91227.jpeg",
 				Status:             "CANCELLED",
 				Price:              150.0,
-				ScheduledDate:      "18 de Junho às 10:00",
+				ScheduledDate:      "Próximos 15 dias",
 				Description:        "Disjuntor geral caindo ao ligar o chuveiro elétrico. Necessário avaliar fiação e disjuntor.",
 				CancellationReason: &reason,
 				CancelledBy:        &cancelledByProvider,
@@ -118,7 +118,7 @@ func NewSolicitationController(serviceRepo domain.ServiceRepository, pushService
 				ProviderPhotoURL: "https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg",
 				Status:           "COMPLETED",
 				Price:            180.0,
-				ScheduledDate:    "15 de Junho às 09:00",
+				ScheduledDate:    "Próximos 30 dias",
 				Description:      "Limpeza completa de apartamento de 2 quartos, sala, cozinha e 2 banheiros.",
 				TechnicalReport:  &completedTechReport,
 				Photos:           []string{},
@@ -145,9 +145,14 @@ func (ctrl *SolicitationController) GetSolicitations(c *gin.Context) {
 	pgRepo := ctrl.pgRepo
 	ctrl.mu.RUnlock()
 
+	userID := middleware.GetUserID(c)
+
 	if pgRepo != nil && pgRepo.HasPool() {
-		items, err := pgRepo.GetSolicitationsByUser(c.Request.Context(), middleware.GetUserID(c))
-		if err == nil && len(items) > 0 {
+		items, err := pgRepo.GetSolicitationsByUser(c.Request.Context(), userID)
+		if err == nil {
+			if items == nil {
+				items = []model.SolicitationItem{}
+			}
 			c.JSON(http.StatusOK, items)
 			return
 		}
@@ -155,7 +160,23 @@ func (ctrl *SolicitationController) GetSolicitations(c *gin.Context) {
 
 	ctrl.mu.RLock()
 	defer ctrl.mu.RUnlock()
-	c.JSON(http.StatusOK, ctrl.solicitations)
+
+	if userID == "" {
+		c.JSON(http.StatusOK, ctrl.solicitations)
+		return
+	}
+
+	filtered := make([]model.SolicitationItem, 0)
+	for _, s := range ctrl.solicitations {
+		if s.ClientID == userID || matchSolicitationID(s.ClientID, userID) {
+			filtered = append(filtered, s)
+		}
+	}
+	if len(filtered) == 0 {
+		c.JSON(http.StatusOK, ctrl.solicitations)
+		return
+	}
+	c.JSON(http.StatusOK, filtered)
 }
 
 func (ctrl *SolicitationController) GetSolicitationByID(c *gin.Context) {
@@ -186,38 +207,51 @@ func (ctrl *SolicitationController) GetSolicitationByID(c *gin.Context) {
 }
 
 func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
-	var req struct {
-		ServiceID     string   `json:"service_id"`
-		ServiceName   string   `json:"service_name"`
-		Description   string   `json:"description" binding:"required"`
-		ScheduledDate string   `json:"scheduled_date"`
-		Photos        []string `json:"photos"`
-		Location      string   `json:"location"`
-		HouseNumber   string   `json:"house_number"`
-	}
+	var req model.CreateSolicitationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	name := req.ServiceName
-	serviceID := req.ServiceID
+	name := strings.TrimSpace(req.ServiceTitle)
+	if name == "" {
+		name = strings.TrimSpace(req.Title)
+	}
+	if name == "" {
+		name = strings.TrimSpace(req.ServiceName)
+	}
+
+	serviceID := strings.TrimSpace(req.ServiceID)
 	if serviceID == "" {
 		serviceID = "22222222-0000-0000-0000-000000000001"
 	}
 
-	providerName := "Carlos Mendes"
-	providerTitle := "Especialista Residencial"
-	providerRating := "4.9"
-	providerPhotoURL := "https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg"
-	providerID := "11111111-0000-0000-0000-000000000009"
+	providerID := strings.TrimSpace(req.ProviderID)
+	if providerID == "" {
+		providerID = strings.TrimSpace(req.BikkerID)
+	}
+	if providerID == "" {
+		providerID = "22222222-2222-2222-2222-222222222222"
+	}
 
-	if req.ServiceName == "" && req.ServiceID != "" {
+	providerName := "Rafael Oliveira Costa"
+	providerTitle := "Eletricista / Instalação e Manutenção Elétrica"
+	providerRating := "0.0"
+	providerPhotoURL := "https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg"
+
+	categoryName := strings.TrimSpace(req.CategoryName)
+	if categoryName == "" {
+		categoryName = "Geral"
+	}
+
+	if (name == "" || name == "Solicitação de Serviço") && serviceID != "" {
 		if ctrl.serviceRepo != nil {
-			service, err := ctrl.serviceRepo.GetServiceByID(c.Request.Context(), req.ServiceID)
+			service, err := ctrl.serviceRepo.GetServiceByID(c.Request.Context(), serviceID)
 			if err == nil && service != nil {
-				name = service.Name
-				if service.BikkerID != "" {
+				if name == "" || name == "Solicitação de Serviço" {
+					name = service.Name
+				}
+				if service.BikkerID != "" && (providerID == "" || providerID == "11111111-0000-0000-0000-000000000009") {
 					providerID = service.BikkerID
 				}
 				if service.ProviderName != "" {
@@ -236,16 +270,20 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 				if service.ReviewsAverage > 0 {
 					providerRating = fmt.Sprintf("%.1f", service.ReviewsAverage)
 				}
+				if categoryName == "Geral" && service.Category != nil && service.Category.Name != "" {
+					categoryName = service.Category.Name
+				}
 			}
 		}
-		if name == "" {
-			name = "Solicitação de Serviço"
-		}
-	} else if name == "" {
+	}
+	if name == "" {
 		name = "Solicitação de Serviço"
 	}
 
-	photos := req.Photos
+	photos := req.ClientPhotos
+	if len(photos) == 0 && len(req.Photos) > 0 {
+		photos = req.Photos
+	}
 	if photos == nil {
 		photos = []string{}
 	}
@@ -253,24 +291,49 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 	dateStr := time.Now().Format("02/01/2006")
 	clientID := middleware.GetUserID(c)
 	if clientID == "" {
-		clientID = "11111111-0000-0000-0000-000000000099"
+		clientID = "11111111-1111-1111-1111-111111111111"
 	}
 
-	neighborhood := ""
-	if req.Location != "" && req.HouseNumber != "" {
-		neighborhood = fmt.Sprintf("%s, Nº %s", req.Location, req.HouseNumber)
-	} else if req.Location != "" {
-		neighborhood = req.Location
+	exactAddress := strings.TrimSpace(req.LocationAddress)
+	if exactAddress == "" {
+		exactAddress = strings.TrimSpace(req.Address)
 	}
+	if exactAddress == "" {
+		exactAddress = strings.TrimSpace(req.Location)
+		if exactAddress != "" && strings.TrimSpace(req.HouseNumber) != "" {
+			exactAddress = fmt.Sprintf("%s, Nº %s", exactAddress, strings.TrimSpace(req.HouseNumber))
+		}
+	}
+	if exactAddress == "" {
+		exactAddress = "São Paulo, SP"
+	}
+
+	scheduledDate := strings.TrimSpace(req.PreferredDate)
+	if scheduledDate == "" {
+		scheduledDate = strings.TrimSpace(req.ScheduledDate)
+	}
+	if scheduledDate == "" {
+		scheduledDate = "O mais rápido possível"
+	}
+
+	contactName := strings.TrimSpace(req.ContactName)
+	contactPhone := strings.TrimSpace(req.ContactPhone)
 
 	newSol := model.SolicitationItem{
 		ID:                 fmt.Sprintf("sol_%d", time.Now().Unix()),
 		ClientID:           clientID,
+		ContactName:        contactName,
+		ContactPhone:       contactPhone,
 		ProviderID:         providerID,
 		ServiceID:          serviceID,
 		ServiceName:        name,
-		Neighborhood:       neighborhood,
+		ServiceTitle:       name,
+		Category:           categoryName,
+		CategoryName:       categoryName,
+		Neighborhood:       exactAddress,
 		Location:           req.Location,
+		Address:            exactAddress,
+		LocationAddress:    exactAddress,
 		HouseNumber:        req.HouseNumber,
 		ProviderName:       providerName,
 		ProviderTitle:      providerTitle,
@@ -278,10 +341,13 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 		ProviderPhotoURL:   providerPhotoURL,
 		Status:             "PENDING_BUDGET",
 		Price:              0.0,
-		ScheduledDate:      req.ScheduledDate,
+		ScheduledDate:      scheduledDate,
+		PreferredDate:      scheduledDate,
 		Description:        req.Description,
+		InitialDescription: req.Description,
 		RenegotiationCount: 0,
 		Photos:             photos,
+		ClientPhotos:       photos,
 		CreatedDate:        dateStr,
 	}
 
@@ -566,7 +632,7 @@ func (ctrl *SolicitationController) ApplyProviderProposalInMemory(id, providerID
 		CounterOffers: offers,
 		Photos:        []string{},
 		CreatedDate:   time.Now().Format("02/01/2006"),
-		ScheduledDate: time.Now().Format("02/01/2006 às 14:00"),
+		ScheduledDate: "O mais rápido possível",
 	}
 	if strings.TrimSpace(note) != "" {
 		n := strings.TrimSpace(note)
@@ -643,7 +709,7 @@ func (ctrl *SolicitationController) ApplyProviderCounterOfferInMemory(id, provid
 		},
 		Photos:        []string{},
 		CreatedDate:   time.Now().Format("02/01/2006"),
-		ScheduledDate: time.Now().Format("02/01/2006 às 14:00"),
+		ScheduledDate: "O mais rápido possível",
 	}
 	ctrl.solicitations = append([]model.SolicitationItem{newItem}, ctrl.solicitations...)
 	return &newItem
@@ -680,7 +746,7 @@ func (ctrl *SolicitationController) ApplyProviderRejectInMemory(id, providerID, 
 		CancellationReason: &rCopy,
 		Photos:             []string{},
 		CreatedDate:        time.Now().Format("02/01/2006"),
-		ScheduledDate:      time.Now().Format("02/01/2006 às 14:00"),
+		ScheduledDate:      "O mais rápido possível",
 	}
 	ctrl.solicitations = append([]model.SolicitationItem{newItem}, ctrl.solicitations...)
 	return &newItem
@@ -818,8 +884,8 @@ func (ctrl *SolicitationController) GetActiveSolicitations() []model.Solicitatio
 	ctrl.mu.RUnlock()
 
 	if pgRepo != nil && pgRepo.HasPool() {
-		if items, err := pgRepo.GetSolicitationsByUser(context.Background(), ""); err == nil && len(items) > 0 {
-			var active []model.SolicitationItem
+		if items, err := pgRepo.GetSolicitationsByUser(context.Background(), ""); err == nil {
+			active := make([]model.SolicitationItem, 0)
 			for _, s := range items {
 				if s.Status == "PENDING_BUDGET" || s.Status == "BUDGET_RECEIVED" || s.Status == "NEGOTIATING" || s.Status == "ACTIVE" {
 					active = append(active, s)
@@ -846,3 +912,28 @@ func (ctrl *SolicitationController) GetActiveSolicitations() []model.Solicitatio
 	}
 	return active
 }
+
+func (ctrl *SolicitationController) GetSolicitationsByUser(ctx context.Context, userID string) ([]model.SolicitationItem, error) {
+	ctrl.mu.RLock()
+	pgRepo := ctrl.pgRepo
+	ctrl.mu.RUnlock()
+
+	if pgRepo != nil && pgRepo.HasPool() {
+		return pgRepo.GetSolicitationsByUser(ctx, userID)
+	}
+
+	ctrl.mu.RLock()
+	defer ctrl.mu.RUnlock()
+
+	items := make([]model.SolicitationItem, 0, len(ctrl.solicitations))
+	for _, s := range ctrl.solicitations {
+		if userID == "" || s.ClientID == userID || matchSolicitationID(s.ClientID, userID) {
+			items = append(items, s)
+		}
+	}
+	if len(items) == 0 && userID == "" {
+		items = append(items, ctrl.solicitations...)
+	}
+	return items, nil
+}
+

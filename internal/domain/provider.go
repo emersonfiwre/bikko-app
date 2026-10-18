@@ -2,19 +2,45 @@ package domain
 
 import "time"
 
+type LeadCounterOffer struct {
+	ID             string  `json:"id"`
+	Round          int     `json:"round"`
+	Author         string  `json:"author"` // "CLIENT" or "PROVIDER"
+	IsFromClient   bool    `json:"is_from_client"`
+	Price          float64 `json:"price"`
+	FormattedPrice string  `json:"formatted_price,omitempty"`
+	Reason         string  `json:"reason"`
+}
+
 type OpportunityLead struct {
-	ID             string    `json:"id"`
-	Title          string    `json:"title"`
-	Description    string    `json:"description"`
-	Category       string    `json:"category"`
-	Urgency        string    `json:"urgency"` // "EMERGENCY" or "SCHEDULED"
-	Photos         []string  `json:"photos"`
-	PriceType      string    `json:"price_type"` // "BUDGET_TO_NEGOTIATE"
-	DistanceKm     float64   `json:"distance_km"`
-	Neighborhood   string    `json:"neighborhood"`
-	ClientName     string    `json:"client_name"`
-	ClientVerified bool      `json:"client_verified"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID                 string             `json:"id"`
+	Title              string             `json:"title"`
+	ServiceTitle       string             `json:"service_title,omitempty"`
+	Description        string             `json:"description"`
+	Category           string             `json:"category"`
+	Urgency            string             `json:"urgency"` // "EMERGENCY" or "SCHEDULED"
+	Photos             []string           `json:"photos"`
+	ClientPhotos       []string           `json:"client_photos,omitempty"`
+	PriceType          string             `json:"price_type"` // "BUDGET_TO_NEGOTIATE"
+	EstimatedValue     string             `json:"estimated_value,omitempty"`
+	DistanceKm         float64            `json:"distance_km"`
+	Neighborhood       string             `json:"neighborhood"`
+	Address            string             `json:"address,omitempty"`
+	LocationAddress    string             `json:"location_address,omitempty"`
+	ClientName         string             `json:"client_name"`
+	ContactName        string             `json:"contact_name,omitempty"`
+	ClientPhone        string             `json:"client_phone,omitempty"`
+	ContactPhone       string             `json:"contact_phone,omitempty"`
+	AccountPhone       string             `json:"account_phone,omitempty"`
+	ClientAccountPhone string             `json:"client_account_phone,omitempty"`
+	ClientRating       string             `json:"client_rating,omitempty"`
+	ClientVerified     bool               `json:"client_verified"`
+	CreatedAt          time.Time          `json:"created_at"`
+	ScheduledDate      string             `json:"scheduled_date,omitempty"`
+	PreferredDate      string             `json:"preferred_date,omitempty"`
+	CounterOffers      []LeadCounterOffer `json:"counter_offers,omitempty"`
+	CounterOfferHistory []LeadCounterOffer `json:"counter_offer_history,omitempty"`
+	NegotiationHistory []LeadCounterOffer `json:"negotiation_history,omitempty"`
 }
 
 type PortfolioItem struct {
@@ -29,6 +55,7 @@ type PortfolioItem struct {
 }
 
 type PortfolioCreateRequest struct {
+	ID           string   `json:"id,omitempty"`
 	Title        string   `json:"title"`
 	Name         string   `json:"name"`
 	Category     string   `json:"category"`
@@ -39,6 +66,7 @@ type PortfolioCreateRequest struct {
 	Photos       []string `json:"photos"`
 	Latitude     *float64 `json:"latitude"`
 	Longitude    *float64 `json:"longitude"`
+	IsActive     *bool    `json:"is_active"`
 }
 
 type ProviderProfileUpdateRequest struct {

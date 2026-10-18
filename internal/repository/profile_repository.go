@@ -11,6 +11,10 @@ type SolicitationProvider interface {
 	GetActiveSolicitations() []model.SolicitationItem
 }
 
+type UserSolicitationsProvider interface {
+	GetSolicitationsByUser(ctx context.Context, userID string) ([]model.SolicitationItem, error)
+}
+
 type ProfileRepository interface {
 	GetProfileByID(ctx context.Context, id string) (*model.ProfileResponse, error)
 	DeleteAccount(ctx context.Context, id string) error
@@ -27,43 +31,73 @@ func NewMockProfileRepository(sp SolicitationProvider) ProfileRepository {
 }
 
 func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (*model.ProfileResponse, error) {
-	var orders []model.ProfileOrderItem
-	if r.solicitationProvider != nil {
-		for _, s := range r.solicitationProvider.GetActiveSolicitations() {
-			var statusText string
-			switch s.Status {
-			case "PENDING_BUDGET":
-				statusText = "Aguardando Orçamento"
-			case "BUDGET_RECEIVED":
-				statusText = fmt.Sprintf("Orçamento Recebido · R$ %.2f", s.Price)
-			case "ACTIVE":
-				statusText = "Em Andamento"
-			default:
-				statusText = s.ScheduledDate
-			}
+	orders := make([]model.ProfileOrderItem, 0)
+	var solicitations []model.SolicitationItem
 
-			thumb := s.ProviderPhotoURL
-			if len(s.Photos) > 0 && s.Photos[0] != "" {
-				thumb = s.Photos[0]
-			}
-
-			orders = append(orders, model.ProfileOrderItem{
-				ID:             s.ID,
-				Name:           s.ServiceName,
-				Photos:         s.Photos,
-				Thumbnail:      thumb,
-				Description:    s.Description,
-				Distance:       statusText,
-				ReviewsAverage: s.ProviderRating,
-				TotalReviews:   1,
-				BikkerID:       s.ID,
-				Category: &model.ProfileOrderCategory{
-					ID:      "cat_" + s.ID,
-					Name:    s.ProviderName,
-					IconURL: s.ProviderPhotoURL,
-				},
-			})
+	if up, ok := r.solicitationProvider.(UserSolicitationsProvider); ok && id != "" {
+		if items, err := up.GetSolicitationsByUser(ctx, id); err == nil && len(items) > 0 {
+			solicitations = items
 		}
+	}
+	if len(solicitations) == 0 && r.solicitationProvider != nil {
+		solicitations = r.solicitationProvider.GetActiveSolicitations()
+	}
+
+	for _, s := range solicitations {
+		var statusText string
+		switch s.Status {
+		case "PENDING_BUDGET":
+			statusText = "Aguardando Orçamento"
+		case "BUDGET_RECEIVED":
+			if s.Price > 0 {
+				statusText = fmt.Sprintf("Orçamento Recebido · R$ %.2f", s.Price)
+			} else {
+				statusText = "Orçamento Recebido"
+			}
+		case "NEGOTIATING":
+			if s.Price > 0 {
+				statusText = fmt.Sprintf("Em Negociação · R$ %.2f", s.Price)
+			} else {
+				statusText = "Em Negociação"
+			}
+		case "ACTIVE", "IN_PROGRESS", "SCHEDULED":
+			statusText = "Em Andamento"
+		case "COMPLETED":
+			statusText = "Concluído"
+		case "CANCELLED":
+			statusText = "Cancelado"
+		default:
+			statusText = s.ScheduledDate
+		}
+
+		thumb := s.ProviderPhotoURL
+		if len(s.Photos) > 0 && s.Photos[0] != "" {
+			thumb = s.Photos[0]
+		} else if len(s.ClientPhotos) > 0 && s.ClientPhotos[0] != "" {
+			thumb = s.ClientPhotos[0]
+		}
+
+		bikkerID := s.ProviderID
+		if bikkerID == "" {
+			bikkerID = s.ID
+		}
+
+		orders = append(orders, model.ProfileOrderItem{
+			ID:             s.ID,
+			Name:           s.ServiceName,
+			Photos:         s.Photos,
+			Thumbnail:      thumb,
+			Description:    s.Description,
+			Distance:       statusText,
+			ReviewsAverage: s.ProviderRating,
+			TotalReviews:   1,
+			BikkerID:       bikkerID,
+			Category: &model.ProfileOrderCategory{
+				ID:      "cat_" + s.ID,
+				Name:    s.ProviderName,
+				IconURL: s.ProviderPhotoURL,
+			},
+		})
 	}
 
 	isActive := true

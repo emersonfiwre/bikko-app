@@ -89,7 +89,7 @@ func main() {
 
 	// 5. UseCases & Services
 	authSvc := service.NewAuthService(userRepo, jwtService, fbAuth)
-	profileSvc := service.NewProfileService(userRepo, profileMockRepo)
+	profileSvc := service.NewProfileService(userRepo, profileMockRepo, service.WithAuthAndJWT(authSvc, jwtService))
 
 	homeUC := usecase.NewHomeUseCase(categoryRepo, serviceRepo, bikkerRepo, redisSvc)
 	searchUC := usecase.NewSearchUseCase(categoryRepo, serviceRepo)

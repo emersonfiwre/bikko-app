@@ -47,4 +47,5 @@ type UserRepository interface {
 	DeleteUser(ctx context.Context, id string) error
 	UpdateDeviceToken(ctx context.Context, id string, token *string) error
 	GetDeviceToken(ctx context.Context, id string) (string, error)
+	UpgradeToBikker(ctx context.Context, userID string, bikker *Bikker) (*User, error)
 }

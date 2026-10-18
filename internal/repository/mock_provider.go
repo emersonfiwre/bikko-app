@@ -1,10 +1,28 @@
 package repository
 
 import (
+	"sync"
 	"time"
 
 	"bikko-app/internal/domain"
 )
+
+var (
+	mockProviderActiveMu sync.RWMutex
+	mockProviderActive   = true
+)
+
+func SetMockProviderActive(active bool) {
+	mockProviderActiveMu.Lock()
+	defer mockProviderActiveMu.Unlock()
+	mockProviderActive = active
+}
+
+func GetMockProviderActive() bool {
+	mockProviderActiveMu.RLock()
+	defer mockProviderActiveMu.RUnlock()
+	return mockProviderActive
+}
 
 type MockProviderRepository struct{}
 
@@ -60,7 +78,7 @@ func (r *MockProviderRepository) GetMockLeads() []domain.OpportunityLead {
 }
 
 func (r *MockProviderRepository) GetMockPortfolio() []domain.PortfolioItem {
-	isActive := true
+	isActive := GetMockProviderActive()
 	return []domain.PortfolioItem{
 		{
 			ID:          "port-1",

@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # Compila o ponto de entrada da aplicação
-RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/api/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/bikkofy-api/main.go
 
 # Production stage
 FROM alpine:latest

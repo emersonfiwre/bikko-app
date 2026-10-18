@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"bikko-app/internal/domain"
+	"bikko-app/internal/model"
 	"bikko-app/internal/usecase"
 
 	"github.com/gin-gonic/gin"
@@ -12,10 +13,15 @@ import (
 
 type ReviewController struct {
 	ratingUC *usecase.RatingUseCase
+	store    model.SolicitationStore
 }
 
 func NewReviewController(ratingUC *usecase.RatingUseCase) *ReviewController {
 	return &ReviewController{ratingUC: ratingUC}
+}
+
+func (ctrl *ReviewController) SetSolicitationStore(store model.SolicitationStore) {
+	ctrl.store = store
 }
 
 type CreateReviewRequest struct {
@@ -115,6 +121,16 @@ func (ctrl *ReviewController) processReview(c *gin.Context, input domain.CreateR
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if ctrl.store != nil {
+		if inMem := ctrl.store.GetInMemorySolicitationByID(input.OrderID); inMem != nil {
+			inMem.Status = "COMPLETED"
+			inMem.IsClientEvaluated = true
+			inMem.ClientEvaluated = true
+			inMem.ClientRatingGiven = input.Rating
+			ctrl.store.SyncSolicitationInMemory(*inMem)
+		}
 	}
 
 	c.JSON(http.StatusCreated, gin.H{

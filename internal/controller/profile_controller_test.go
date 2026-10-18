@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"bikko-app/internal/model"
+	"bikko-app/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,10 +20,11 @@ func init() {
 }
 
 type fakeProfileService struct {
-	getProfileFunc         func(ctx context.Context, userID string) (*model.ProfileResponse, error)
-	deleteAccountFunc      func(ctx context.Context, userID string) error
-	updateProfileFunc      func(ctx context.Context, userID, name, email, phone string) error
-	updateProfilePhotoFunc func(ctx context.Context, userID, photoURL string) error
+	getProfileFunc             func(ctx context.Context, userID string) (*model.ProfileResponse, error)
+	deleteAccountFunc          func(ctx context.Context, userID string) error
+	updateProfileFunc          func(ctx context.Context, userID, name, email, phone string) error
+	updateProfileWithTokenFunc func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error)
+	updateProfilePhotoFunc     func(ctx context.Context, userID, photoURL string) error
 }
 
 func (f *fakeProfileService) GetProfile(ctx context.Context, userID string) (*model.ProfileResponse, error) {
@@ -44,6 +46,16 @@ func (f *fakeProfileService) UpdateProfile(ctx context.Context, userID, name, em
 		return f.updateProfileFunc(ctx, userID, name, email, phone)
 	}
 	return errors.New("not implemented")
+}
+
+func (f *fakeProfileService) UpdateProfileWithToken(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+	if f.updateProfileWithTokenFunc != nil {
+		return f.updateProfileWithTokenFunc(ctx, userID, name, email, phone, firebaseToken)
+	}
+	if f.updateProfileFunc != nil {
+		return "", f.updateProfileFunc(ctx, userID, name, email, phone)
+	}
+	return "", errors.New("not implemented")
 }
 
 func (f *fakeProfileService) UpdateProfilePhoto(ctx context.Context, userID, photoURL string) error {
@@ -307,6 +319,215 @@ func TestProfileController_UpdateProfile(t *testing.T) {
 
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("expected status 500, got %d", w.Code)
+		}
+	})
+
+	t.Run("success updates profile when phone does not change (no token in response)", func(t *testing.T) {
+		svc := &fakeProfileService{
+			updateProfileWithTokenFunc: func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+				if userID != "user_123" {
+					t.Errorf("expected userID 'user_123', got '%s'", userID)
+				}
+				if firebaseToken != "" {
+					t.Errorf("expected empty firebaseToken, got '%s'", firebaseToken)
+				}
+				return "", nil
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfile(c)
+		})
+
+		payload := UpdateProfileRequest{
+			Name:  "Emerson Torres",
+			Email: "emerson@bikko.com.br",
+			Phone: "(11) 98888-7777",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["status"] != "success" {
+			t.Errorf("expected status 'success', got %v", resp["status"])
+		}
+		if _, hasToken := resp["token"]; hasToken {
+			t.Errorf("expected response not to contain token, got %v", resp["token"])
+		}
+	})
+
+	t.Run("success updates profile when phone changes with valid firebase_token returns refreshed JWT", func(t *testing.T) {
+		svc := &fakeProfileService{
+			updateProfileWithTokenFunc: func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+				if firebaseToken != "mock_token_123" {
+					t.Errorf("expected firebaseToken 'mock_token_123', got '%s'", firebaseToken)
+				}
+				return "jwt_refreshed_token_abc", nil
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfile(c)
+		})
+
+		payload := UpdateProfileRequest{
+			Name:          "Emerson Torres",
+			Email:         "emerson@bikko.com.br",
+			Phone:         "(11) 99999-0000",
+			FirebaseToken: "mock_token_123",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["status"] != "success" {
+			t.Errorf("expected status 'success', got %v", resp["status"])
+		}
+		if resp["token"] != "jwt_refreshed_token_abc" {
+			t.Errorf("expected token 'jwt_refreshed_token_abc', got %v", resp["token"])
+		}
+	})
+
+	t.Run("returns 401 Unauthorized when phone change requires firebase token", func(t *testing.T) {
+		svc := &fakeProfileService{
+			updateProfileWithTokenFunc: func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+				return "", service.ErrPhoneChangeRequiresFirebaseToken
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfile(c)
+		})
+
+		payload := UpdateProfileRequest{
+			Name:  "Emerson Torres",
+			Email: "emerson@bikko.com.br",
+			Phone: "(11) 99999-0000",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["error"] != "FIREBASE_TOKEN_INVALID" {
+			t.Errorf("expected error 'FIREBASE_TOKEN_INVALID', got %q", resp["error"])
+		}
+		if resp["message"] != "Autenticação do novo número via Firebase é obrigatória" {
+			t.Errorf("expected message 'Autenticação do novo número via Firebase é obrigatória', got %q", resp["message"])
+		}
+	})
+
+	t.Run("returns 401 Unauthorized when firebase token is invalid", func(t *testing.T) {
+		svc := &fakeProfileService{
+			updateProfileWithTokenFunc: func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+				return "", service.ErrInvalidFirebaseToken
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfile(c)
+		})
+
+		payload := UpdateProfileRequest{
+			Name:          "Emerson Torres",
+			Email:         "emerson@bikko.com.br",
+			Phone:         "(11) 99999-0000",
+			FirebaseToken: "invalid_token",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["error"] != "FIREBASE_TOKEN_INVALID" {
+			t.Errorf("expected error 'FIREBASE_TOKEN_INVALID', got %q", resp["error"])
+		}
+	})
+
+	t.Run("returns 409 Conflict when phone already in use", func(t *testing.T) {
+		svc := &fakeProfileService{
+			updateProfileWithTokenFunc: func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+				return "", service.ErrPhoneAlreadyInUse
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfile(c)
+		})
+
+		payload := UpdateProfileRequest{
+			Name:          "Emerson Torres",
+			Email:         "emerson@bikko.com.br",
+			Phone:         "(11) 99999-0000",
+			FirebaseToken: "mock_token_123",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusConflict {
+			t.Fatalf("expected status 409, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["error"] != "PHONE_ALREADY_IN_USE" {
+			t.Errorf("expected error 'PHONE_ALREADY_IN_USE', got %q", resp["error"])
+		}
+		if resp["message"] != "Este número de telefone já está vinculado a outra conta" {
+			t.Errorf("expected message 'Este número de telefone já está vinculado a outra conta', got %q", resp["message"])
 		}
 	})
 }
