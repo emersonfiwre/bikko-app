@@ -750,14 +750,16 @@ func (pc *ProviderController) GetPortfolio(c *gin.Context) {
 				}
 				active := s.IsActive
 				items = append(items, domain.PortfolioItem{
-					ID:          s.ID,
-					Title:       s.Name,
-					Category:    catName,
-					Description: s.Description,
-					ImageUrl:    img,
-					Photos:      s.Photos,
-					IsActive:    &active,
-					CompletedAt: completedAt,
+					ID:             s.ID,
+					Title:          s.Name,
+					Category:       catName,
+					Description:    s.Description,
+					ImageUrl:       img,
+					Photos:         s.Photos,
+					IsActive:       &active,
+					CompletedAt:    completedAt,
+					ReviewsAverage: s.ReviewsAverage,
+					TotalReviews:   s.TotalReviews,
 				})
 			}
 			c.JSON(http.StatusOK, items)
