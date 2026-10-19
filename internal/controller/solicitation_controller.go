@@ -244,35 +244,35 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 		categoryName = "Geral"
 	}
 
-	if (name == "" || name == "Solicitação de Serviço") && serviceID != "" {
-		if ctrl.serviceRepo != nil {
-			service, err := ctrl.serviceRepo.GetServiceByID(c.Request.Context(), serviceID)
-			if err == nil && service != nil {
-				if name == "" || name == "Solicitação de Serviço" {
-					name = service.Name
-				}
-				if service.BikkerID != "" && (providerID == "" || providerID == "11111111-0000-0000-0000-000000000009") {
-					providerID = service.BikkerID
-				}
-				if service.ProviderName != "" {
-					providerName = service.ProviderName
-				}
-				if service.ProviderTitle != "" {
-					providerTitle = service.ProviderTitle
-				} else if service.Category != nil && service.Category.Name != "" {
-					providerTitle = service.Category.Name
-				}
-				if service.ProviderPhotoURL != "" {
-					providerPhotoURL = service.ProviderPhotoURL
-				} else if service.ThumbnailURL != "" {
-					providerPhotoURL = service.ThumbnailURL
-				}
-				if service.ReviewsAverage > 0 {
-					providerRating = fmt.Sprintf("%.1f", service.ReviewsAverage)
-				}
-				if categoryName == "Geral" && service.Category != nil && service.Category.Name != "" {
-					categoryName = service.Category.Name
-				}
+	if serviceID != "" && ctrl.serviceRepo != nil {
+		service, err := ctrl.serviceRepo.GetServiceByID(c.Request.Context(), serviceID)
+		if err == nil && service != nil {
+			if name == "" || name == "Solicitação de Serviço" {
+				name = service.Name
+			}
+			if service.BikkerID != "" && (providerID == "" || providerID == "11111111-0000-0000-0000-000000000009") {
+				providerID = service.BikkerID
+			}
+			if service.ProviderName != "" {
+				providerName = service.ProviderName
+			}
+			if service.ProviderTitle != "" {
+				providerTitle = service.ProviderTitle
+			} else if service.Category != nil && service.Category.Name != "" {
+				providerTitle = service.Category.Name
+			}
+			if service.ProviderPhotoURL != "" {
+				providerPhotoURL = service.ProviderPhotoURL
+			} else if service.ThumbnailURL != "" {
+				providerPhotoURL = service.ThumbnailURL
+			}
+			if service.ReviewsAverage > 0 {
+				providerRating = fmt.Sprintf("%.1f", service.ReviewsAverage)
+			}
+			if (categoryName == "Geral" || categoryName == "") && service.Category != nil && service.Category.Name != "" {
+				categoryName = service.Category.Name
+			} else if (categoryName == "Geral" || categoryName == "") && service.ProviderTitle != "" {
+				categoryName = service.ProviderTitle
 			}
 		}
 	}
@@ -322,6 +322,9 @@ func (ctrl *SolicitationController) CreateSolicitation(c *gin.Context) {
 	newSol := model.SolicitationItem{
 		ID:                 fmt.Sprintf("sol_%d", time.Now().Unix()),
 		ClientID:           clientID,
+		ClientName:         "Lucas Ferreira Mendes",
+		AccountPhone:       "11999990000",
+		ClientAccountPhone: "11999990000",
 		ContactName:        contactName,
 		ContactPhone:       contactPhone,
 		ProviderID:         providerID,
@@ -539,7 +542,19 @@ func (ctrl *SolicitationController) SyncSolicitationInMemory(item model.Solicita
 }
 
 func formatBRLAmount(amount float64) string {
-	return strings.ReplaceAll(fmt.Sprintf("%.2f", amount), ".", ",")
+	parts := strings.Split(fmt.Sprintf("%.2f", amount), ".")
+	intPart := parts[0]
+	decPart := parts[1]
+
+	var result []string
+	for len(intPart) > 3 {
+		result = append([]string{intPart[len(intPart)-3:]}, result...)
+		intPart = intPart[:len(intPart)-3]
+	}
+	if len(intPart) > 0 {
+		result = append([]string{intPart}, result...)
+	}
+	return strings.Join(result, ".") + "," + decPart
 }
 
 func (ctrl *SolicitationController) ApplyProviderProposalInMemory(id, providerID string, price float64, note string, accepted bool) *model.SolicitationItem {
@@ -763,6 +778,7 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 		CounterOfferMessage *string  `json:"counter_offer_message"`
 		SenderRole          *string  `json:"sender_role"`
 		SenderID            *string  `json:"sender_id"`
+		Photos              []string `json:"photos"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -793,6 +809,7 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 			CounterOfferMessage: req.CounterOfferMessage,
 			SenderRole:          req.SenderRole,
 			SenderID:            req.SenderID,
+			Photos:              req.Photos,
 		})
 		if err == nil && updated != nil {
 			ctrl.SyncSolicitationInMemory(*updated)
@@ -847,6 +864,7 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 					Price:          *req.CounterOfferPrice,
 					FormattedPrice: formatBRLAmount(*req.CounterOfferPrice),
 					Reason:         reason,
+					Photos:         req.Photos,
 				})
 
 				if ctrl.solicitations[i].RenegotiationCount >= 5 {

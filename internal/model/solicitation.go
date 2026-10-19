@@ -1,13 +1,14 @@
 package model
 
 type CounterOfferItem struct {
-	ID             string  `json:"id"`
-	Round          int     `json:"round"`
-	Author         string  `json:"author"` // "CLIENT" or "PROVIDER"
-	IsFromClient   bool    `json:"is_from_client"`
-	Price          float64 `json:"price"`
-	FormattedPrice string  `json:"formatted_price,omitempty"`
-	Reason         string  `json:"reason"`
+	ID             string   `json:"id"`
+	Round          int      `json:"round"`
+	Author         string   `json:"author"` // "CLIENT" or "PROVIDER"
+	IsFromClient   bool     `json:"is_from_client"`
+	Price          float64  `json:"price"`
+	FormattedPrice string   `json:"formatted_price,omitempty"`
+	Reason         string   `json:"reason"`
+	Photos         []string `json:"photos,omitempty"`
 }
 
 type SolicitationItem struct {

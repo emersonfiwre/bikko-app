@@ -140,7 +140,19 @@ func (pc *ProviderController) GetFeed(c *gin.Context) {
 }
 
 func formatBRLPrice(amount float64) string {
-	return strings.ReplaceAll(fmt.Sprintf("%.2f", amount), ".", ",")
+	parts := strings.Split(fmt.Sprintf("%.2f", amount), ".")
+	intPart := parts[0]
+	decPart := parts[1]
+
+	var result []string
+	for len(intPart) > 3 {
+		result = append([]string{intPart[len(intPart)-3:]}, result...)
+		intPart = intPart[:len(intPart)-3]
+	}
+	if len(intPart) > 0 {
+		result = append([]string{intPart}, result...)
+	}
+	return strings.Join(result, ".") + "," + decPart
 }
 
 func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.SolicitationItem, extra map[string]interface{}) gin.H {
@@ -278,9 +290,6 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 		neighborhood = "São Paulo, SP"
 	}
 	clientName := sol.ClientName
-	if clientName == "" {
-		clientName = sol.ContactName
-	}
 	if clientName == "" {
 		clientName = "Lucas Ferreira Mendes"
 	}

@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"bikko-app/internal/domain"
 	"bikko-app/internal/model"
@@ -25,10 +26,11 @@ func (ctrl *ReviewController) SetSolicitationStore(store model.SolicitationStore
 }
 
 type CreateReviewRequest struct {
-	OrderID    string `json:"order_id"`
-	ReviewerID string `json:"reviewer_id"`
-	Rating     int    `json:"rating" binding:"required,min=1,max=5"`
-	Comment    string `json:"comment"`
+	OrderID    string   `json:"order_id"`
+	ReviewerID string   `json:"reviewer_id"`
+	Rating     int      `json:"rating" binding:"required,min=1,max=5"`
+	Comment    string   `json:"comment"`
+	Tags       []string `json:"tags"`
 }
 
 func (ctrl *ReviewController) CreateReview(c *gin.Context) {
@@ -52,11 +54,21 @@ func (ctrl *ReviewController) CreateReview(c *gin.Context) {
 		reviewerID = "11111111-0000-0000-0000-000000000099"
 	}
 
+	comment := strings.TrimSpace(req.Comment)
+	if len(req.Tags) > 0 {
+		tagStr := "[" + strings.Join(req.Tags, ", ") + "]"
+		if comment != "" && !strings.HasPrefix(comment, "[") {
+			comment = tagStr + " " + comment
+		} else if comment == "" {
+			comment = tagStr
+		}
+	}
+
 	input := domain.CreateReviewInput{
 		OrderID:    req.OrderID,
 		ReviewerID: reviewerID,
 		Rating:     req.Rating,
-		Comment:    req.Comment,
+		Comment:    comment,
 	}
 
 	ctrl.processReview(c, input)
@@ -98,11 +110,21 @@ func (ctrl *ReviewController) handleTargetReview(c *gin.Context) {
 		reviewerID = "11111111-0000-0000-0000-000000000099"
 	}
 
+	comment := strings.TrimSpace(req.Comment)
+	if len(req.Tags) > 0 {
+		tagStr := "[" + strings.Join(req.Tags, ", ") + "]"
+		if comment != "" && !strings.HasPrefix(comment, "[") {
+			comment = tagStr + " " + comment
+		} else if comment == "" {
+			comment = tagStr
+		}
+	}
+
 	input := domain.CreateReviewInput{
 		OrderID:    orderID,
 		ReviewerID: reviewerID,
 		Rating:     req.Rating,
-		Comment:    req.Comment,
+		Comment:    comment,
 	}
 
 	ctrl.processReview(c, input)

@@ -83,11 +83,14 @@ func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (
 		}
 
 		catName := s.CategoryName
-		if catName == "" {
-			catName = s.Category
-		}
-		if catName == "" {
-			catName = "Serviço"
+		if catName == "" || catName == "Geral" {
+			if s.Category != "" && s.Category != "Geral" {
+				catName = s.Category
+			} else if s.ProviderTitle != "" {
+				catName = s.ProviderTitle
+			} else {
+				catName = "Serviço"
+			}
 		}
 
 		orders = append(orders, model.ProfileOrderItem{

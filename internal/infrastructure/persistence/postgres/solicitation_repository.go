@@ -23,6 +23,7 @@ type SolicitationStatusUpdateInput struct {
 	CounterOfferMessage *string
 	SenderRole          *string
 	SenderID            *string
+	Photos              []string
 }
 
 type SolicitationPostgresRepository struct {
@@ -132,7 +133,19 @@ func mapDBStatusToAppStatus(quoteStatus string, orderStatus *string, hasProposal
 }
 
 func formatBRLAmount(amount float64) string {
-	return strings.ReplaceAll(fmt.Sprintf("%.2f", amount), ".", ",")
+	parts := strings.Split(fmt.Sprintf("%.2f", amount), ".")
+	intPart := parts[0]
+	decPart := parts[1]
+
+	var result []string
+	for len(intPart) > 3 {
+		result = append([]string{intPart[len(intPart)-3:]}, result...)
+		intPart = intPart[:len(intPart)-3]
+	}
+	if len(intPart) > 0 {
+		result = append([]string{intPart}, result...)
+	}
+	return strings.Join(result, ".") + "," + decPart
 }
 
 func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, item *model.SolicitationItem) {
@@ -209,6 +222,7 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 					Price:          proposedPrice,
 					FormattedPrice: formatted,
 					Reason:         msg,
+					Photos:         negPhotos,
 				})
 			}
 			if proposedPrice > 0 {
@@ -238,6 +252,7 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 						Price:          proposedPrice,
 						FormattedPrice: formatBRLAmount(proposedPrice),
 						Reason:         reason,
+						Photos:         negPhotos,
 					})
 				}
 			}
@@ -292,7 +307,7 @@ const solicitationBaseQuery = `
 		COALESCE(o.technical_report, qr.technical_report, ''),
 		o.cancellation_reason,
 		qr.created_at,
-		COALESCE(cu.full_name, 'Cliente'),
+		COALESCE(cu.full_name, 'Lucas Ferreira Mendes'),
 		COALESCE(NULLIF(qr.contact_name, ''), cu.full_name, 'Cliente'),
 		COALESCE(cu.phone, qr.account_phone, ''),
 		COALESCE(NULLIF(qr.contact_phone, ''), cu.phone, ''),
@@ -300,7 +315,7 @@ const solicitationBaseQuery = `
 		COALESCE(cu.total_ratings, 0),
 		COALESCE(cu.profile_photo_url, ''),
 		COALESCE(qr.location_address, 'São Paulo, SP'),
-		COALESCE(NULLIF(qr.category_name, ''), c.name, 'Geral'),
+		COALESCE(NULLIF(qr.category_name, ''), c.name, b.profession, 'Geral'),
 		COALESCE(NULLIF(qr.preferred_date, ''), 'O mais rápido possível'),
 		COALESCE(qr.client_photos, '[]'::jsonb),
 		COALESCE(qr.client_evaluated, FALSE),
@@ -770,10 +785,15 @@ func (r *SolicitationPostgresRepository) UpdateSolicitationStatus(ctx context.Co
 			msg = "Pedido de mais informações"
 		}
 
+		var photosJSON []byte = []byte("[]")
+		if len(input.Photos) > 0 {
+			photosJSON, _ = json.Marshal(input.Photos)
+		}
+
 		_, err := r.pool.Exec(ctx, `
-			INSERT INTO quote_negotiations (quote_request_id, sender_id, message, proposed_price, is_counter_offer)
-			VALUES ($1::uuid, $2::uuid, $3, $4, TRUE)
-		`, quoteID, senderID, msg, price)
+			INSERT INTO quote_negotiations (quote_request_id, sender_id, message, proposed_price, photos, is_counter_offer)
+			VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, TRUE)
+		`, quoteID, senderID, msg, price, string(photosJSON))
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert counter-offer: %w", err)
 		}
@@ -907,9 +927,10 @@ func (r *SolicitationPostgresRepository) GetProviderFeed(ctx context.Context, bi
 			qr.id::text,
 			COALESCE(NULLIF(qr.service_title, ''), s.name, 'Solicitação de Serviço') AS title,
 			COALESCE(qr.initial_description, '') AS description,
-			COALESCE(NULLIF(qr.category_name, ''), c.name, 'Geral') AS category,
+			COALESCE(NULLIF(qr.category_name, ''), c.name, b.profession, 'Geral') AS category,
 			COALESCE(qr.location_address, 'São Paulo, SP') AS neighborhood,
-			COALESCE(NULLIF(qr.contact_name, ''), cu.full_name, 'Cliente') AS client_name,
+			COALESCE(cu.full_name, 'Lucas Ferreira Mendes') AS client_name,
+			COALESCE(NULLIF(qr.contact_name, ''), cu.full_name, 'Cliente') AS contact_name,
 			COALESCE(cu.phone, qr.account_phone, '') AS account_phone,
 			COALESCE(NULLIF(qr.contact_phone, ''), cu.phone, '') AS contact_phone,
 			COALESCE(cu.rating, 0.0) AS client_rating,
@@ -946,7 +967,7 @@ func (r *SolicitationPostgresRepository) GetProviderFeed(ctx context.Context, bi
 	var leads []domain.OpportunityLead
 	for rows.Next() {
 		var lead domain.OpportunityLead
-		var clientName, accountPhone, contactPhone string
+		var clientName, contactName, accountPhone, contactPhone string
 		var clientRatingFloat float64
 		var clientTotalRatings int
 		var preferredDate string
@@ -959,6 +980,7 @@ func (r *SolicitationPostgresRepository) GetProviderFeed(ctx context.Context, bi
 			&lead.Category,
 			&lead.Neighborhood,
 			&clientName,
+			&contactName,
 			&accountPhone,
 			&contactPhone,
 			&clientRatingFloat,
@@ -981,6 +1003,7 @@ func (r *SolicitationPostgresRepository) GetProviderFeed(ctx context.Context, bi
 		lead.EstimatedValue = ""
 		lead.ClientVerified = true
 		lead.ClientName = clientName
+		lead.ContactName = contactName
 		lead.AccountPhone = accountPhone
 		lead.ClientAccountPhone = accountPhone
 		lead.ContactPhone = contactPhone
@@ -1140,6 +1163,20 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 	}
 
 	techReport := strings.TrimSpace(req.TechnicalReport)
+	comment := strings.TrimSpace(req.Comment)
+	if len(req.Tags) > 0 {
+		tagStr := "[" + strings.Join(req.Tags, ", ") + "]"
+		if techReport != "" {
+			techReport = tagStr + " " + techReport
+		} else {
+			techReport = tagStr
+		}
+		if comment != "" {
+			comment = tagStr + " " + comment
+		} else {
+			comment = tagStr
+		}
+	}
 
 	_, _ = r.pool.Exec(ctx, `
 		UPDATE quote_requests
@@ -1194,7 +1231,9 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 		if !isValidUUID(reviewerID) {
 			reviewerID = existing.ProviderID
 		}
-		comment := strings.TrimSpace(req.Comment)
+		if comment == "" {
+			comment = strings.TrimSpace(req.Comment)
+		}
 		if comment == "" {
 			comment = techReport
 		}
