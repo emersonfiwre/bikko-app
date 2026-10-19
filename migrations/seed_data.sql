@@ -1,37 +1,99 @@
 -- Seed Data for Testing Bikko Platform (PostgreSQL 16 + PostGIS)
+-- Populated directly from Android Mock JSON files (categories.json, services.json, bikkers.json, client.json, solicitations.json)
 
--- 1. Insert Categories
+-- 1. Insert Categories (40 Official Categories pointing to contextual stock photos for test/dev)
 INSERT INTO categories (id, name, icon_url, description, is_active) VALUES
-('c1000000-0000-0000-0000-000000000001', 'Pedreiro & Reformas', 'https://pub-bikko.r2.dev/icons/mason.png', 'Serviços de alvenaria, construção e reparos gerais', true),
-('c1000000-0000-0000-0000-000000000002', 'Eletricista Residencial', 'https://pub-bikko.r2.dev/icons/electrician.png', 'Instalações elétricas, quadros de luz e curtos', true),
-('c1000000-0000-0000-0000-000000000003', 'Encanador & Hidráulica', 'https://pub-bikko.r2.dev/icons/plumber.png', 'Desentupimentos, vazamentos e instalação de pias', true),
-('c1000000-0000-0000-0000-000000000004', 'Pintura & Acabamento', 'https://pub-bikko.r2.dev/icons/painter.png', 'Pinturas internas, externas e aplicação de grafiato', true)
-ON CONFLICT (name) DO NOTHING;
+('b91e2c44-0000-0000-0000-000000000003', 'Eletricista / Instalação e Manutenção Elétrica', 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=600&q=80', 'Ilustração alusiva a serviços elétricos residenciais: um alicate de eletricista, uma lâmpada acesa brilhando, uma tomada moderna e um símbolo de raio estilizado.', true),
+('c84f12aa-0000-0000-0000-000000000004', 'Encanador / Hidráulica e Desentupimento', 'https://images.pexels.com/photos/4792249/pexels-photo-4792249.jpeg', 'Ilustração alusiva a encanamento: uma chave grifo (chave inglesa), canos de PVC conectados e uma torneira cromada com uma gota d''água azul limpa.', true),
+('e56bc118-0000-0000-0000-000000000006', 'Montador de Móveis / Montagem e Desmontagem', 'https://images.pexels.com/photos/3825586/pexels-photo-3825586.jpeg', 'Ilustração de um móvel de madeira moderno (como uma cômoda ou guarda-roupa) sendo montado, acompanhado de uma parafusadeira elétrica, chave de fenda e parafusos.', true),
+('f01dd882-0000-0000-0000-000000000007', 'Marido de Aluguel / Faz-Tudo e Pequenos Reparos', 'https://images.pexels.com/photos/4969409/pexels-photo-4969409.jpeg', 'Ilustração de uma caixa de ferramentas aberta contendo martelo, trena, chave de fenda, alicate e furadeira, simbolizando reparos gerais domésticos.', true),
+('c0000000-0000-0000-0000-000000000005', 'Técnico de Ar-Condicionado / Instalação e Limpeza', 'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&w=600&q=80', 'Ilustração de um aparelho de ar-condicionado split branco instalado na parede, soltando uma brisa fresca azulada com pequenos flocos de neve estilizados.', true),
+('c0000000-0000-0000-0000-000000000006', 'Marceneiro / Móveis Sob Medida e Reparos em Madeira', 'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&w=600&q=80', 'Ilustração de marcenaria: tábuas de madeira nobre, uma serra circular ou serrote, plaina e uma fita métrica.', true),
+('a7c2d4e1-0000-0000-0000-000000000002', 'Pintor / Pintura de Imóvel e Texturas', 'https://images.pexels.com/photos/4505938/pexels-photo-4505938.jpeg', 'Ilustração de um rolo de pintura deixando uma faixa de tinta vibrante em uma parede, acompanhado de uma lata de tinta aberta e uma trincha (pincel).', true),
+('3f8a9b21-0000-0000-0000-000000000001', 'Pedreiro e Mestre de Obras / Reformas e Alvenaria', 'https://images.pexels.com/photos/1643383/pexels-photo-1643383.jpeg', 'Ilustração de construção civil: tijolos cerâmicos empilhados com argamassa, uma colher de pedreiro e um capacete de segurança amarelo.', true),
+('c0000000-0000-0000-0000-000000000009', 'Azulejista / Pisos, Porcelanatos e Revestimentos', 'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&w=600&q=80', 'Ilustração de placas de porcelanato e azulejos brilhantes sendo assentados com uma desempenadeira dentada e espaçadores.', true),
+('c0000000-0000-0000-0000-000000000010', 'Gesseiro / Drywall, Forros de Gesso e Sancas', 'https://images.unsplash.com/photo-1589939705384-5185137a7f0f?auto=format&fit=crop&w=600&q=80', 'Ilustração de placas de drywall e uma sanca de teto moderna em gesso com iluminação embutida suave, junto a uma espátula de gesseiro.', true),
+('c0000000-0000-0000-0000-000000000011', 'Vidraceiro / Envidraçamento de Sacada, Box e Espelhos', 'https://images.unsplash.com/photo-1509644851169-2acc08aa25b5?auto=format&fit=crop&w=600&q=80', 'Ilustração de painéis de vidro temperado translúcido com reflexos suaves, um espelho decorativo e ventosas de transporte de vidro.', true),
+('c0000000-0000-0000-0000-000000000012', 'Telhadista e Calheiro / Telhados e Impermeabilização', 'https://images.unsplash.com/photo-1632759145351-1d592919f522?auto=format&fit=crop&w=600&q=80', 'Ilustração do topo de um telhado residencial com telhas cerâmicas, calha metálica e um escudo ou camada protetora repelindo gotas de chuva.', true),
+('c0000000-0000-0000-0000-000000000013', 'Serralheiro / Portões, Grades e Estruturas Metálicas', 'https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?auto=format&fit=crop&w=600&q=80', 'Ilustração de um portão metálico moderno, máscara de solda estilizada e pequenas faíscas brilhantes de soldagem.', true),
+('c0000000-0000-0000-0000-000000000014', 'Engenheiro, Arquiteto e Designer de Interiores / Projetos', 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=600&q=80', 'Ilustração de uma planta baixa arquitetônica enrolada, compasso, esquadro, paleta de cores e uma maquete 3D de casa moderna.', true),
+('1aa93cfe-0000-0000-0000-000000000008', 'Diarista e Faxineira / Limpeza Residencial e Comercial', 'https://images.pexels.com/photos/3747031/pexels-photo-3747031.jpeg', 'Ilustração de itens de faxina: um balde com água e espuma, borrifador de limpeza, rodo/mop, luvas amarelas e estrelinhas de brilho indicando limpeza.', true),
+('c0000000-0000-0000-0000-000000000016', 'Jardineiro / Jardinagem, Poda e Paisagismo', 'https://images.unsplash.com/photo-1585320806297-9794b3e4eeae?auto=format&fit=crop&w=600&q=80', 'Ilustração de um regador, tesoura de poda, um vaso com planta verde viçosa e grama bem aparada.', true),
+('c0000000-0000-0000-0000-000000000017', 'Piscineiro / Limpeza e Tratamento de Piscinas', 'https://images.unsplash.com/photo-1576013551627-0cc20b96c2a7?auto=format&fit=crop&w=600&q=80', 'Ilustração de água de piscina azul cristalina, uma peneira coletora de piscina, boia cloradora e borda de piscina ensolarada.', true),
+('c0000000-0000-0000-0000-000000000018', 'Passadeira e Lavanderia / Lavagem e Passadoria de Roupas', 'https://images.unsplash.com/photo-1582735689369-4fe89db7114c?auto=format&fit=crop&w=600&q=80', 'Ilustração de um ferro de passar roupas soltando leve vapor sobre uma pilha de roupas dobradas e organizadas, ao lado de cabides.', true),
+('c0000000-0000-0000-0000-000000000019', 'Cozinheira / Culinária Doméstica e Marmitas Caseiras', 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?auto=format&fit=crop&w=600&q=80', 'Ilustração de uma panela moderna soltando aroma quente, chapéu de chef, colher de pau e potes de marmita saudável organizados.', true),
+('c0000000-0000-0000-0000-000000000020', 'Técnico de Celular e Tablet / Conserto de Smartphones', 'https://images.unsplash.com/photo-1580910051074-3eb694886505?auto=format&fit=crop&w=600&q=80', 'Ilustração de um smartphone com a tela sendo reparada/trocada, acompanhado de chaves de precisão e uma engrenagem tecnológica.', true),
+('29bc44de-0000-0000-0000-000000000009', 'Técnico de Informática / Manutenção de Computadores e TI', 'https://images.pexels.com/photos/1181406/pexels-photo-1181406.jpeg', 'Ilustração de um notebook aberto com um ícone de engrenagem e diagnóstico na tela, ao lado de componentes de hardware estilizados.', true),
+('c0000000-0000-0000-0000-000000000022', 'Técnico em Eletrodomésticos / Geladeira, Máquina de Lavar e Fogão', 'https://images.unsplash.com/photo-1626806787461-102c1bfaaea1?auto=format&fit=crop&w=600&q=80', 'Ilustração amigável de uma geladeira e uma máquina de lavar roupas modernas com uma chave inglesa e símbolo de manutenção.', true),
+('c0000000-0000-0000-0000-000000000023', 'Instalador de Redes e Antenas / Wi-Fi, Cabeamento e TV', 'https://images.unsplash.com/photo-1544197150-b99a580bb7a8?auto=format&fit=crop&w=600&q=80', 'Ilustração de um roteador Wi-Fi moderno com duas antenas emitindo ondas de sinal conectadas, junto a um cabo de rede azul.', true),
+('c0000000-0000-0000-0000-000000000024', 'Segurança Eletrônica / Câmeras de Segurança (CFTV) e Alarmes', 'https://images.unsplash.com/photo-1557597774-9d273605dfa9?auto=format&fit=crop&w=600&q=80', 'Ilustração de uma câmera de vigilância residencial moderna (CFTV) e um escudo digital simbolizando proteção e monitoramento.', true),
+('c0000000-0000-0000-0000-000000000025', 'Cabeleireiro e Barbeiro / Corte de Cabelo e Barbearia', 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&w=600&q=80', 'Ilustração estilizada de uma tesoura profissional de cabeleireiro, pente, secador de cabelo e um poste clássico de barbearia (barber pole).', true),
+('c0000000-0000-0000-0000-000000000026', 'Manicure, Pedicure e Maquiador / Unhas e Maquiagem', 'https://images.unsplash.com/photo-1632345031435-8727f6897d53?auto=format&fit=crop&w=600&q=80', 'Ilustração de frascos de esmalte coloridos, pincéis de maquiagem macios, batom e um estojo de sombras.', true),
+('c0000000-0000-0000-0000-000000000027', 'Esteticista e Depiladora / Estética Facial e Corporal', 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=600&q=80', 'Ilustração de spa e estética: potes de creme hidratante, folhas verdes suaves, toalha enrolada e elementos de cuidado com a pele.', true),
+('c0000000-0000-0000-0000-000000000028', 'Massagista e Fisioterapeuta / Massoterapia e Reabilitação', 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=600&q=80', 'Ilustração de pedras de massagem relaxante, óleos essenciais, flor de lótus e elementos que remetem a alívio muscular e bem-estar físico.', true),
+('c0000000-0000-0000-0000-000000000029', 'Personal Trainer e Nutricionista / Treino Físico e Nutrição', 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=600&q=80', 'Ilustração combinando um par de halteres (pesos de academia), uma fita métrica e uma maçã fresca com um coração de saúde.', true),
+('c0000000-0000-0000-0000-000000000030', 'Cuidador de Idosos e Babá / Cuidados Familiares', 'https://images.unsplash.com/photo-1576765608535-5f04d1e3f289?auto=format&fit=crop&w=600&q=80', 'Ilustração acolhedora de duas mãos segurando um coração protetor ao lado de elementos suaves de cuidado familiar e assistência domiciliar.', true),
+('c0000000-0000-0000-0000-000000000031', 'Pet Sitter e Passeador de Cães / Cuidados para Pets', 'https://images.unsplash.com/photo-1601758228041-f3b2795255f1?auto=format&fit=crop&w=600&q=80', 'Ilustração simpática de um cãozinho feliz e um gato, junto a uma guia de passeio (coleira) e uma patinha de pet.', true),
+('c0000000-0000-0000-0000-000000000032', 'Mecânico e Eletricista Automotivo / Oficina, Óleo e Bateria', 'https://images.unsplash.com/photo-1619642751034-765dfdf7c58e?auto=format&fit=crop&w=600&q=80', 'Ilustração de um carro estilizado sob manutenção com uma chave mecânica, uma bateria automotiva e um galão de óleo de motor.', true),
+('c0000000-0000-0000-0000-000000000033', 'Funilaria, Pintura e Estética Automotiva / Polimento', 'https://images.unsplash.com/photo-1520340356584-f9917d1eea6f?auto=format&fit=crop&w=600&q=80', 'Ilustração de um carro reluzente recebendo polimento com uma politriz, espuma de lavagem automotiva e pistola de pintura.', true),
+('c0000000-0000-0000-0000-000000000034', 'Guincho / Reboque e Socorro Veicular 24h', 'https://images.unsplash.com/photo-1580273916550-e323be2ae537?auto=format&fit=crop&w=600&q=80', 'Ilustração de um caminhão guincho de plataforma moderno com giroflex laranja aceso transportando um carro de passeio.', true),
+('c0000000-0000-0000-0000-000000000035', 'Marketing Digital, Sites e Design / Serviços Criativos e Web', 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=600&q=80', 'Ilustração de uma tela de navegador web sendo construída, um megafone de marketing digital, gráficos de crescimento e uma caneta de design gráfico.', true),
+('c0000000-0000-0000-0000-000000000036', 'Consultoria Contábil, Financeira e Apoio Administrativo', 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80', 'Ilustração de uma calculadora moderna, relatórios com gráficos financeiros ascendentes, prancheta de negócios e pasta executiva.', true),
+('c0000000-0000-0000-0000-000000000037', 'Fotógrafo, Videomaker e DJ / Imagem e Som para Eventos', 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=600&q=80', 'Ilustração de uma câmera fotográfica profissional DSLR, fones de ouvido de DJ, caixa de som e luzes de festa ao fundo.', true),
+('c0000000-0000-0000-0000-000000000038', 'Buffet, Garçom, Barman e Estrutura para Festas', 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=600&q=80', 'Ilustração de uma bandeja de garçom cromada, taças de celebração, coqueteleira de barman e elementos de gastronomia para eventos.', true),
+('4de2b7ac-0000-0000-0000-000000000011', 'Professor Particular / Aulas de Violão, Música e Idiomas', 'https://images.pexels.com/photos/374870/pexels-photo-374870.jpeg', 'Ilustração de um violão acústico apoiado ao lado de livros didáticos, notas musicais flutuantes e um balão de idiomas.', true),
+('00000000-0000-0000-0000-000000000099', 'Outros / Chaveiro, Portaria, Segurança e Serviços Gerais', 'https://images.unsplash.com/photo-1582139329536-e7284fece509?auto=format&fit=crop&w=600&q=80', 'Ilustração de um conjunto de ícones variados em harmonia (uma chave dourada de chaveiro, um crachá/escudo de portaria, uma lupa de busca e um símbolo de "mais opções"), representando demais categorias de serviços.', true)
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  icon_url = EXCLUDED.icon_url,
+  description = EXCLUDED.description;
 
--- 2. Insert Users (Customers & Bikkers)
-INSERT INTO users (id, full_name, email, phone, cpf, password_hash, is_bikker, rating, total_ratings) VALUES
-('u1000000-0000-0000-0000-000000000001', 'Cliente Exemplo', 'cliente@bikko.com.br', '(11) 98888-1111', '111.222.333-44', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', false, 5.00, 1),
-('u1000000-0000-0000-0000-000000000002', 'João Silva Eletricista', 'joao.eletrica@bikko.com.br', '(11) 99999-2222', '222.333.444-55', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.90, 15),
-('u1000000-0000-0000-0000-000000000003', 'Carlos Pedreiro', 'carlos.obras@bikko.com.br', '(11) 97777-3333', '333.444.555-66', '$2a$10$vN4kY8v6YxW0Nn2/R2R3eeS.p01G5XmZ41sM2Y6Z41sM2Y6Z41sM2', true, 4.80, 8)
-ON CONFLICT (email) DO NOTHING;
+-- Clear all operational and user tables so only the 40 categories and the 2 homologation users exist
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE users ALTER COLUMN password_hash SET DEFAULT '';
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS contact_name VARCHAR(255) DEFAULT '';
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(50) DEFAULT '';
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS account_phone VARCHAR(50) DEFAULT '';
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS service_title VARCHAR(255) DEFAULT '';
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS category_name VARCHAR(255) DEFAULT '';
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS preferred_date VARCHAR(100) DEFAULT 'O mais rápido possível';
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS client_photos JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS client_evaluated BOOLEAN DEFAULT FALSE;
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS bikker_evaluated BOOLEAN DEFAULT FALSE;
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS client_rating_given INTEGER DEFAULT 0;
+ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS technical_report TEXT DEFAULT '';
+ALTER TABLE quote_requests ALTER COLUMN service_id DROP NOT NULL;
+ALTER TABLE orders ALTER COLUMN service_id DROP NOT NULL;
+ALTER TABLE reviews ALTER COLUMN service_id DROP NOT NULL;
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_order_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_order_reviewer ON reviews (order_id, reviewer_id);
+TRUNCATE TABLE reviews, quote_negotiations, orders, quote_requests, service_photos, services, bikkers, users RESTART IDENTITY CASCADE;
 
--- 3. Insert Bikkers (Geospatial Point: São Paulo -23.55052, -46.63330)
+-- 2. Insert 2 Homologation Test Users in São Paulo (Pinheiros - SP) with zero orders and nearby coordinates
+INSERT INTO users (id, full_name, email, phone, cpf, is_bikker, rating, total_ratings, profile_photo_url) VALUES
+('11111111-1111-1111-1111-111111111111', 'Lucas Ferreira Mendes', 'lucas.mendes@bikkofy.com.br', '11999990000', '345.678.901-22', false, 0.00, 0, 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg'),
+('22222222-2222-2222-2222-222222222222', 'Rafael Oliveira Costa', 'rafael.costa@bikkerfy.com.br', '11988880000', '456.789.012-33', true, 0.00, 0, 'https://images.pexels.com/photos/220453/pexels-photo-220453.jpeg')
+ON CONFLICT (id) DO UPDATE SET
+  full_name = EXCLUDED.full_name,
+  email = EXCLUDED.email,
+  phone = EXCLUDED.phone,
+  cpf = EXCLUDED.cpf,
+  is_bikker = EXCLUDED.is_bikker,
+  rating = EXCLUDED.rating,
+  total_ratings = EXCLUDED.total_ratings,
+  profile_photo_url = EXCLUDED.profile_photo_url;
+
+-- 3. Insert Bikker Profile for Rafael Oliveira Costa (Pinheiros, São Paulo - SP, ~600m from client)
 INSERT INTO bikkers (id, profession, experience_years, description, location_name, location_geom, rating, total_reviews, is_active) VALUES
-('u1000000-0000-0000-0000-000000000002', 'Eletricista Residencial', '8 anos', 'Especialista em instalações de chuveiro, quadros elétricos e iluminação LED', 'Centro, São Paulo - SP', ST_SetSRID(ST_MakePoint(-46.63330, -23.55052), 4326)::geography, 4.90, 15, true),
-('u1000000-0000-0000-0000-000000000003', 'Mestre de Obras e Alvenaria', '12 anos', 'Construção, reformas de banheiros, assentamento de pisos e azulejos', 'Pinheiros, São Paulo - SP', ST_SetSRID(ST_MakePoint(-46.68900, -23.56100), 4326)::geography, 4.80, 8, true)
-ON CONFLICT (id) DO NOTHING;
+('22222222-2222-2222-2222-222222222222', 'Eletricista / Instalação e Manutenção Elétrica', '5_TO_10', 'Eletricista residencial e predial em São Paulo. Especialista em quadros de distribuição, chuveiros, tomadas, iluminação LED e reparos elétricos gerais.', 'Pinheiros, São Paulo - SP', ST_SetSRID(ST_MakePoint(-46.6914, -23.5614), 4326)::geography, 0.00, 0, true)
+ON CONFLICT (id) DO UPDATE SET
+  profession = EXCLUDED.profession,
+  experience_years = EXCLUDED.experience_years,
+  description = EXCLUDED.description,
+  location_name = EXCLUDED.location_name,
+  location_geom = EXCLUDED.location_geom,
+  rating = EXCLUDED.rating,
+  total_reviews = EXCLUDED.total_reviews,
+  is_active = EXCLUDED.is_active;
 
--- 4. Insert Services (Data Shaping with Category JOIN)
-INSERT INTO services (id, bikker_id, category_id, name, description, thumbnail_url, location_geom, reviews_average, total_reviews, is_active) VALUES
-('s1000000-0000-0000-0000-000000000001', 'u1000000-0000-0000-0000-000000000002', 'c1000000-0000-0000-0000-000000000002', 'Troca de Quadro Elétrico & Chuveiros', 'Instalação rápida e segura com emissão de laudo elétrico residencial', 'https://pub-bikko.r2.dev/thumbnails/electrician_1.jpg', ST_SetSRID(ST_MakePoint(-46.63330, -23.55052), 4326)::geography, 4.90, 15, true),
-('s1000000-0000-0000-0000-000000000002', 'u1000000-0000-0000-0000-000000000003', 'c1000000-0000-0000-0000-000000000001', 'Reforma de Banheiros & Assentamento de Porcelanato', 'Serviço completo com fino acabamento e garantia de 1 ano', 'https://pub-bikko.r2.dev/thumbnails/mason_1.jpg', ST_SetSRID(ST_MakePoint(-46.68900, -23.56100), 4326)::geography, 4.80, 8, true)
-ON CONFLICT (id) DO NOTHING;
 
--- 5. Insert Completed Order (Ready for testing Rating Cascade)
-INSERT INTO quote_requests (id, customer_id, bikker_id, service_id, status, initial_description, location_address, location_geom) VALUES
-('q1000000-0000-0000-0000-000000000001', 'u1000000-0000-0000-0000-000000000001', 'u1000000-0000-0000-0000-000000000002', 's1000000-0000-0000-0000-000000000001', 'ACCEPTED', 'Preciso trocar o disjuntor principal da minha casa', 'Av. Paulista, 1000', ST_SetSRID(ST_MakePoint(-46.65588, -23.56141), 4326)::geography)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO orders (id, quote_request_id, customer_id, bikker_id, service_id, status, final_price, scheduled_date) VALUES
-('o1000000-0000-0000-0000-000000000001', 'q1000000-0000-0000-0000-000000000001', 'u1000000-0000-0000-0000-000000000001', 'u1000000-0000-0000-0000-000000000002', 's1000000-0000-0000-0000-000000000001', 'COMPLETED', 250.00, CURRENT_TIMESTAMP - INTERVAL '1 day')
-ON CONFLICT (id) DO NOTHING;

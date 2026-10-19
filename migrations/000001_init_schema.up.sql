@@ -13,12 +13,14 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) NOT NULL UNIQUE,
     phone VARCHAR(50),
     cpf VARCHAR(14) UNIQUE,
-    password_hash VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) DEFAULT '',
     profile_photo_url VARCHAR(512),
     rating DECIMAL(3, 2) DEFAULT 0.00,
     total_ratings INTEGER DEFAULT 0,
     is_bikker BOOLEAN DEFAULT FALSE,
     notifications_enabled BOOLEAN DEFAULT TRUE,
+    device_token VARCHAR(512) DEFAULT NULL,
+    deleted_at TIMESTAMP WITH TIME ZONE DEFAULT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -78,12 +80,23 @@ CREATE TABLE IF NOT EXISTS quote_requests (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     customer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     bikker_id UUID NOT NULL REFERENCES bikkers(id) ON DELETE CASCADE,
-    service_id UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+    service_id UUID REFERENCES services(id) ON DELETE CASCADE,
     status quote_status DEFAULT 'PENDING',
     initial_description TEXT NOT NULL,
     desired_date TIMESTAMP WITH TIME ZONE,
     location_address VARCHAR(255),
     location_geom GEOGRAPHY(Point, 4326),
+    contact_name VARCHAR(255) DEFAULT '',
+    contact_phone VARCHAR(50) DEFAULT '',
+    account_phone VARCHAR(50) DEFAULT '',
+    service_title VARCHAR(255) DEFAULT '',
+    category_name VARCHAR(255) DEFAULT '',
+    preferred_date VARCHAR(100) DEFAULT 'O mais rápido possível',
+    client_photos JSONB DEFAULT '[]'::jsonb,
+    client_evaluated BOOLEAN DEFAULT FALSE,
+    bikker_evaluated BOOLEAN DEFAULT FALSE,
+    client_rating_given INTEGER DEFAULT 0,
+    technical_report TEXT DEFAULT '',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -106,20 +119,21 @@ CREATE TABLE IF NOT EXISTS orders (
     quote_request_id UUID NOT NULL UNIQUE REFERENCES quote_requests(id) ON DELETE RESTRICT,
     customer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     bikker_id UUID NOT NULL REFERENCES bikkers(id) ON DELETE CASCADE,
-    service_id UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+    service_id UUID REFERENCES services(id) ON DELETE CASCADE,
     status order_status DEFAULT 'SCHEDULED',
     final_price DECIMAL(10, 2) NOT NULL,
     scheduled_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    technical_report VARCHAR(280),
     cancellation_reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 9. REVIEWS Table (1:1 with completed ORDERS)
+-- 9. REVIEWS Table
 CREATE TABLE IF NOT EXISTS reviews (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    order_id UUID NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
-    service_id UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    service_id UUID REFERENCES services(id) ON DELETE CASCADE,
     reviewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     bikker_id UUID NOT NULL REFERENCES bikkers(id) ON DELETE CASCADE,
     rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
@@ -128,6 +142,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     dislike_count INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_order_reviewer ON reviews (order_id, reviewer_id);
 
 -- Spatial GiST Indexes for Fast Proximity Queries
 CREATE INDEX IF NOT EXISTS idx_bikkers_location_gist ON bikkers USING GIST (location_geom);

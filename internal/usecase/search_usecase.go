@@ -24,8 +24,7 @@ func NewSearchUseCase(
 func (uc *SearchUseCase) Search(ctx context.Context, query string) (*domain.SearchResponse, error) {
 	if query == "" {
 		return &domain.SearchResponse{
-			Services:   []domain.Service{},
-			Categories: []domain.Category{},
+			Items: []domain.SearchItem{},
 		}, nil
 	}
 
@@ -39,8 +38,29 @@ func (uc *SearchUseCase) Search(ctx context.Context, query string) (*domain.Sear
 		categories = []domain.Category{}
 	}
 
+	items := make([]domain.SearchItem, 0, len(categories)+len(services))
+
+	for _, c := range categories {
+		items = append(items, domain.SearchItem{
+			ID:          c.ID,
+			Name:        c.Name,
+			Type:        "category",
+			ImageURL:    c.IconURL,
+			Description: "Categoria de Serviço",
+		})
+	}
+
+	for _, s := range services {
+		items = append(items, domain.SearchItem{
+			ID:          s.ID,
+			Name:        s.Name,
+			Type:        "service",
+			ImageURL:    s.ThumbnailURL,
+			Description: s.Description,
+		})
+	}
+
 	return &domain.SearchResponse{
-		Services:   services,
-		Categories: categories,
+		Items: items,
 	}, nil
 }
