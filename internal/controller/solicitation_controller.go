@@ -588,29 +588,17 @@ func (ctrl *SolicitationController) ApplyProviderProposalInMemory(id, providerID
 					ctrl.solicitations[i].CounterOfferMessage = &n
 				}
 				if price > 0 {
-					if len(ctrl.solicitations[i].CounterOffers) == 0 {
-						ctrl.solicitations[i].CounterOffers = []model.CounterOfferItem{
-							{
-								ID:             "co_1",
-								Round:          1,
-								Author:         "PROVIDER",
-								IsFromClient:   false,
-								Price:          price,
-								FormattedPrice: formatBRLAmount(price),
-								Reason:         reasonText,
-							},
-						}
-					} else if len(ctrl.solicitations[i].CounterOffers) == 1 && !ctrl.solicitations[i].CounterOffers[0].IsFromClient {
-						ctrl.solicitations[i].CounterOffers[0] = model.CounterOfferItem{
-							ID:             "co_1",
-							Round:          1,
-							Author:         "PROVIDER",
-							IsFromClient:   false,
-							Price:          price,
-							FormattedPrice: formatBRLAmount(price),
-							Reason:         reasonText,
-						}
-					}
+					roundNum := len(ctrl.solicitations[i].CounterOffers) + 1
+					ctrl.solicitations[i].CounterOffers = append(ctrl.solicitations[i].CounterOffers, model.CounterOfferItem{
+						ID:             fmt.Sprintf("co_%d", roundNum),
+						Round:          roundNum,
+						Author:         "PROVIDER",
+						IsFromClient:   false,
+						Price:          price,
+						FormattedPrice: formatBRLAmount(price),
+						Reason:         reasonText,
+					})
+					ctrl.solicitations[i].RenegotiationCount++
 				}
 			}
 			cp := ctrl.solicitations[i]
@@ -666,22 +654,28 @@ func (ctrl *SolicitationController) ApplyProviderCounterOfferInMemory(id, provid
 			if providerID != "" {
 				ctrl.solicitations[i].ProviderID = providerID
 			}
-			ctrl.solicitations[i].Status = "BUDGET_RECEIVED"
-			ctrl.solicitations[i].Price = counterPrice
-			pCopy := counterPrice
-			ctrl.solicitations[i].CounterOfferPrice = &pCopy
+			if counterPrice > 0 {
+				ctrl.solicitations[i].Status = "BUDGET_RECEIVED"
+				ctrl.solicitations[i].Price = counterPrice
+				pCopy := counterPrice
+				ctrl.solicitations[i].CounterOfferPrice = &pCopy
+			}
 			rCopy := strings.TrimSpace(reason)
 			ctrl.solicitations[i].CounterOfferMessage = &rCopy
 			ctrl.solicitations[i].RenegotiationCount++
 
 			roundNum := len(ctrl.solicitations[i].CounterOffers) + 1
+			formatted := "Pedido de mais informações"
+			if counterPrice > 0 {
+				formatted = formatBRLAmount(counterPrice)
+			}
 			ctrl.solicitations[i].CounterOffers = append(ctrl.solicitations[i].CounterOffers, model.CounterOfferItem{
 				ID:             fmt.Sprintf("co_%d", roundNum),
 				Round:          roundNum,
 				Author:         "PROVIDER",
 				IsFromClient:   false,
 				Price:          counterPrice,
-				FormattedPrice: formatBRLAmount(counterPrice),
+				FormattedPrice: formatted,
 				Reason:         rCopy,
 			})
 
@@ -842,18 +836,32 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 			if req.CancelledBy != nil {
 				ctrl.solicitations[i].CancelledBy = req.CancelledBy
 			}
-			if req.CounterOfferPrice != nil {
-				ctrl.solicitations[i].CounterOfferPrice = req.CounterOfferPrice
-				ctrl.solicitations[i].Price = *req.CounterOfferPrice
+			if req.CounterOfferPrice != nil || (req.CounterOfferMessage != nil && strings.TrimSpace(*req.CounterOfferMessage) != "") || len(req.Photos) > 0 {
+				price := 0.0
+				if req.CounterOfferPrice != nil {
+					price = *req.CounterOfferPrice
+					ctrl.solicitations[i].CounterOfferPrice = req.CounterOfferPrice
+				}
 				ctrl.solicitations[i].RenegotiationCount++
 
 				author := "CLIENT"
 				if req.SenderRole != nil && strings.EqualFold(*req.SenderRole, "PROVIDER") {
 					author = "PROVIDER"
 				}
+				if author == "PROVIDER" && price > 0 {
+					ctrl.solicitations[i].Price = price
+				}
 				reason := ""
 				if req.CounterOfferMessage != nil {
-					reason = *req.CounterOfferMessage
+					reason = strings.TrimSpace(*req.CounterOfferMessage)
+				}
+				formatted := formatBRLAmount(price)
+				if price <= 0 {
+					if author == "CLIENT" {
+						formatted = "Sob consulta"
+					} else {
+						formatted = "Pedido de mais informações"
+					}
 				}
 				roundNum := len(ctrl.solicitations[i].CounterOffers) + 1
 				ctrl.solicitations[i].CounterOffers = append(ctrl.solicitations[i].CounterOffers, model.CounterOfferItem{
@@ -861,11 +869,18 @@ func (ctrl *SolicitationController) UpdateStatus(c *gin.Context) {
 					Round:          roundNum,
 					Author:         author,
 					IsFromClient:   author == "CLIENT",
-					Price:          *req.CounterOfferPrice,
-					FormattedPrice: formatBRLAmount(*req.CounterOfferPrice),
+					Price:          price,
+					FormattedPrice: formatted,
 					Reason:         reason,
 					Photos:         req.Photos,
 				})
+
+				for _, p := range req.Photos {
+					if p != "" {
+						ctrl.solicitations[i].Photos = append(ctrl.solicitations[i].Photos, p)
+						ctrl.solicitations[i].ClientPhotos = append(ctrl.solicitations[i].ClientPhotos, p)
+					}
+				}
 
 				if ctrl.solicitations[i].RenegotiationCount >= 5 {
 					ctrl.solicitations[i].Status = "CANCELLED"

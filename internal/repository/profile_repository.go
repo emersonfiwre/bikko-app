@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"bikko-app/internal/model"
 )
@@ -93,9 +94,16 @@ func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (
 			}
 		}
 
+		orderServiceName := strings.TrimSpace(s.ServiceName)
+		if orderServiceName == "" || orderServiceName == "Solicitação de Serviço" || orderServiceName == s.ProviderName || strings.Contains(strings.ToLower(orderServiceName), "rafael") {
+			if catName != "" && catName != "Serviço" && catName != "Geral" {
+				orderServiceName = catName
+			}
+		}
+
 		orders = append(orders, model.ProfileOrderItem{
 			ID:             s.ID,
-			Name:           s.ServiceName,
+			Name:           orderServiceName,
 			Photos:         s.Photos,
 			Thumbnail:      thumb,
 			Description:    s.Description,

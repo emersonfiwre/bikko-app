@@ -82,7 +82,9 @@ func (r *serviceRepository) GetByID(ctx context.Context, id string) (*domain.Ser
 			r.created_at
 		FROM reviews r
 		LEFT JOIN users u ON r.reviewer_id = u.id
-		WHERE r.service_id = $1
+		WHERE r.service_id = $1 
+		  AND r.reviewer_id != r.bikker_id 
+		  AND r.reviewer_id NOT IN (SELECT b.user_id FROM bikkers b WHERE b.id = r.bikker_id)
 		ORDER BY r.created_at DESC
 	`
 	reviewRows, err := r.pool.Query(ctx, reviewsQuery, s.ID)

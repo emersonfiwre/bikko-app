@@ -54,6 +54,20 @@ func (r *SolicitationPostgresRepository) runAutoMigrations() {
 		"ALTER TABLE reviews ALTER COLUMN service_id DROP NOT NULL",
 		"ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_order_id_key",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_order_reviewer ON reviews (order_id, reviewer_id)",
+		`CREATE TABLE IF NOT EXISTS client_reviews (
+			id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+			order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+			client_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			bikker_id UUID NOT NULL REFERENCES bikkers(id) ON DELETE CASCADE,
+			rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+			comment TEXT,
+			technical_report TEXT,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)`,
+		"CREATE INDEX IF NOT EXISTS idx_client_reviews_client_id ON client_reviews(client_id)",
+		"CREATE INDEX IF NOT EXISTS idx_client_reviews_bikker_id ON client_reviews(bikker_id)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_client_reviews_order_bikker ON client_reviews(order_id, bikker_id)",
+		"DELETE FROM reviews WHERE reviewer_id = bikker_id OR reviewer_id IN (SELECT b.user_id FROM bikkers b WHERE b.id = reviews.bikker_id)",
 	}
 
 	for _, stmt := range stmts {
@@ -121,10 +135,7 @@ func mapDBStatusToAppStatus(quoteStatus string, orderStatus *string, hasProposal
 	case "ACCEPTED":
 		return "ACTIVE"
 	case "NEGOTIATING":
-		if hasProposal || counterOfferCount > 0 {
-			return "BUDGET_RECEIVED"
-		}
-		return "BUDGET_RECEIVED"
+		return "NEGOTIATING"
 	case "PENDING":
 		return "PENDING_BUDGET"
 	default:
@@ -211,7 +222,11 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 			}
 			formatted := formatBRLAmount(proposedPrice)
 			if proposedPrice <= 0 {
-				formatted = "Pedido de mais informações"
+				if author == "CLIENT" {
+					formatted = "Sob consulta"
+				} else {
+					formatted = "Pedido de mais informações"
+				}
 			}
 			if round <= 5 {
 				counterOffers = append(counterOffers, model.CounterOfferItem{
@@ -228,7 +243,9 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 			if proposedPrice > 0 {
 				pCopy := proposedPrice
 				item.CounterOfferPrice = &pCopy
-				item.Price = proposedPrice
+				if author == "PROVIDER" {
+					item.Price = proposedPrice
+				}
 			}
 			if msg != "" {
 				mCopy := msg
@@ -283,8 +300,21 @@ func (r *SolicitationPostgresRepository) loadNegotiations(ctx context.Context, i
 		item.Photos = []string{}
 	}
 	item.ClientPhotos = item.Photos
-	if item.Status == "NEGOTIATING" && (hasInitialProposal || len(counterOffers) > 0) {
-		item.Status = "BUDGET_RECEIVED"
+	if item.Status == "NEGOTIATING" || item.Status == "BUDGET_RECEIVED" || item.Status == "PENDING_BUDGET" {
+		if !hasInitialProposal && item.Price <= 0 {
+			item.Status = "PENDING_BUDGET"
+		} else if len(counterOffers) > 0 {
+			lastOffer := counterOffers[len(counterOffers)-1]
+			if lastOffer.IsFromClient {
+				item.Status = "NEGOTIATING"
+			} else {
+				item.Status = "BUDGET_RECEIVED"
+			}
+		} else if hasInitialProposal {
+			item.Status = "BUDGET_RECEIVED"
+		} else {
+			item.Status = "NEGOTIATING"
+		}
 	}
 }
 
@@ -443,7 +473,6 @@ func (r *SolicitationPostgresRepository) GetSolicitationsByUser(ctx context.Cont
 
 		item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, 0)
 		r.loadNegotiations(ctx, &item)
-		item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, item.RenegotiationCount)
 		if item.Status == "CANCELLED" {
 			if item.CancellationReason != nil && strings.Contains(*item.CancellationReason, "5 contrapropostas") {
 				maxCancel := "MAX_RENEGOTIATIONS"
@@ -561,8 +590,8 @@ func (r *SolicitationPostgresRepository) GetSolicitationByID(ctx context.Context
 	}
 	item.ClientPhotos = item.Photos
 
+	item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, 0)
 	r.loadNegotiations(ctx, &item)
-	item.Status = mapDBStatusToAppStatus(quoteStatus, orderStatus, item.Price > 0, item.RenegotiationCount)
 	if item.Status == "CANCELLED" {
 		if item.CancellationReason != nil && strings.Contains(*item.CancellationReason, "5 contrapropostas") {
 			maxCancel := "MAX_RENEGOTIATIONS"
@@ -853,8 +882,10 @@ func (r *SolicitationPostgresRepository) UpdateSolicitationStatus(ctx context.Co
 	}
 
 	finalPrice := existing.Price
-	if input.CounterOfferPrice != nil && *input.CounterOfferPrice > 0 {
-		finalPrice = *input.CounterOfferPrice
+	if shouldUpsertOrder && (dbOrderStatus == "SCHEDULED" || dbOrderStatus == "IN_PROGRESS" || dbOrderStatus == "COMPLETED") {
+		if input.CounterOfferPrice != nil && *input.CounterOfferPrice > 0 {
+			finalPrice = *input.CounterOfferPrice
+		}
 	}
 
 	if shouldUpsertOrder || input.TechnicalReport != nil || cancellationReason != nil {
@@ -1086,7 +1117,7 @@ func (r *SolicitationPostgresRepository) SubmitProviderProposal(ctx context.Cont
 	}
 
 	_, _ = r.pool.Exec(ctx, `
-		UPDATE quote_requests SET status = 'NEGOTIATING', updated_at = NOW() WHERE id = $1::uuid
+		UPDATE quote_requests SET status = 'BUDGET_RECEIVED', updated_at = NOW() WHERE id = $1::uuid
 	`, existing.ID)
 
 	return r.GetSolicitationByID(ctx, existing.ID)
@@ -1238,10 +1269,14 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 			comment = techReport
 		}
 		_, _ = r.pool.Exec(ctx, `
-			INSERT INTO reviews (order_id, service_id, reviewer_id, bikker_id, rating, comment)
-			VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5, $6)
-			ON CONFLICT DO NOTHING
-		`, orderID, validServiceID, reviewerID, existing.ProviderID, req.Stars, comment)
+			INSERT INTO client_reviews (order_id, client_id, bikker_id, rating, comment, technical_report)
+			VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6)
+			ON CONFLICT (order_id, bikker_id) DO UPDATE SET
+				rating = EXCLUDED.rating,
+				comment = EXCLUDED.comment,
+				technical_report = EXCLUDED.technical_report,
+				created_at = NOW()
+		`, orderID, existing.ClientID, reviewerID, req.Stars, comment, techReport)
 	}
 
 	return nil

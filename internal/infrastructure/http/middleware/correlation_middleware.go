@@ -13,6 +13,8 @@ type correlationIDKey struct{}
 const (
 	HeaderCorrelationID = "X-Correlation-ID"
 	HeaderRequestID     = "X-Request-ID"
+	HeaderClientFlow    = "X-Client-Flow"
+	HeaderSessionID     = "X-Session-ID"
 	ContextCorrelationKey = "correlation_id"
 )
 

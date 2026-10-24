@@ -216,6 +216,7 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 			Price:          offer.Price,
 			FormattedPrice: formatted,
 			Reason:         offer.Reason,
+			Photos:         offer.Photos,
 		})
 	}
 
@@ -242,19 +243,27 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 		counterOffers = counterOffers[:5]
 	}
 
+	hasValidPricedProposal := sol.Price > 0
+	for _, co := range counterOffers {
+		if co.Price > 0 {
+			hasValidPricedProposal = true
+			break
+		}
+	}
+
 	isAccepted := strings.EqualFold(sol.Status, "ACTIVE") ||
 		strings.EqualFold(sol.Status, "ACCEPTED") ||
 		strings.EqualFold(sol.Status, "COMPLETED")
-	isProposalSent := len(counterOffers) > 0 ||
+	isProposalSent := (hasValidPricedProposal ||
 		strings.EqualFold(sol.Status, "BUDGET_RECEIVED") ||
-		strings.EqualFold(sol.Status, "NEGOTIATING") ||
-		isAccepted
-	showNegotiationMode := isProposalSent && !isAccepted
+		(strings.EqualFold(sol.Status, "NEGOTIATING") && hasValidPricedProposal) ||
+		isAccepted) && hasValidPricedProposal
+	showNegotiationMode := hasValidPricedProposal && !isAccepted
 
 	var latestCounterValue *string
 	var latestCounterNote *string
 	for i := len(counterOffers) - 1; i >= 0; i-- {
-		if counterOffers[i].IsFromClient || strings.EqualFold(counterOffers[i].Author, "CLIENT") {
+		if (counterOffers[i].IsFromClient || strings.EqualFold(counterOffers[i].Author, "CLIENT")) && counterOffers[i].Price > 0 {
 			val := counterOffers[i].FormattedPrice
 			note := counterOffers[i].Reason
 			latestCounterValue = &val
@@ -264,7 +273,7 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 	}
 	if latestCounterValue == nil && len(counterOffers) > 0 {
 		last := counterOffers[len(counterOffers)-1]
-		if !last.IsFromClient && len(counterOffers) > 1 {
+		if !last.IsFromClient && len(counterOffers) > 1 && last.Price > 0 {
 			val := last.FormattedPrice
 			note := last.Reason
 			latestCounterValue = &val
@@ -308,6 +317,13 @@ func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.So
 	photos := sol.ClientPhotos
 	if len(photos) == 0 {
 		photos = sol.Photos
+	}
+	for _, co := range counterOffers {
+		for _, p := range co.Photos {
+			if p != "" {
+				photos = append(photos, p)
+			}
+		}
 	}
 	if photos == nil {
 		photos = []string{}
@@ -580,8 +596,12 @@ func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
 	var updated *model.SolicitationItem
 	if pc.solRepo != nil && pc.solRepo.HasPool() {
 		providerRole := "PROVIDER"
+		statusToSet := "BUDGET_RECEIVED"
+		if counterPrice <= 0 {
+			statusToSet = "PENDING_BUDGET"
+		}
 		if res, err := pc.solRepo.UpdateSolicitationStatus(c.Request.Context(), id, postgres.SolicitationStatusUpdateInput{
-			Status:              "BUDGET_RECEIVED",
+			Status:              statusToSet,
 			CounterOfferPrice:   &counterPrice,
 			CounterOfferMessage: &reason,
 			SenderRole:          &providerRole,
@@ -606,11 +626,17 @@ func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
 				"solicitation_id": updated.ID,
 				"type":            "counter_offer",
 			}
+			pushTitle := "Nova Contraproposta do Profissional! 💬"
+			pushMessage := fmt.Sprintf("O profissional enviou uma contraproposta de R$ %.2f para %s.", counterPrice, updated.ServiceName)
+			if counterPrice <= 0 {
+				pushTitle = "Pedido de mais informações 💬"
+				pushMessage = fmt.Sprintf("O profissional solicitou mais detalhes para %s.", updated.ServiceName)
+			}
 			if pushErr := pc.pushService.SendNotification(
 				c.Request.Context(),
 				updated.ClientID,
-				"Nova Contraproposta do Profissional! 💬",
-				fmt.Sprintf("O profissional enviou uma contraproposta de R$ %.2f para %s.", counterPrice, updated.ServiceName),
+				pushTitle,
+				pushMessage,
 				pushData,
 			); pushErr != nil {
 				slog.Error("failed to send counter-offer push notification",
@@ -626,8 +652,12 @@ func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
 		return
 	}
 
+	fallbackStatus := "BUDGET_RECEIVED"
+	if counterPrice <= 0 {
+		fallbackStatus = "PENDING_BUDGET"
+	}
 	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, nil, map[string]interface{}{
-		"status":            "BUDGET_RECEIVED",
+		"status":            fallbackStatus,
 		"message":           "Contra-proposta enviada com sucesso.",
 		"negotiation_count": 1,
 	}))

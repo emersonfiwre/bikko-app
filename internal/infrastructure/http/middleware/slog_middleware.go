@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 
 	"bikko-app/internal/infrastructure/logger"
@@ -39,6 +40,13 @@ func SlogMiddleware() gin.HandlerFunc {
 			slog.Float64("elapsed_ms", elapsedMs),
 			slog.String("user_id", GetUserID(c)),
 			slog.String("client_ip", c.ClientIP()),
+		}
+
+		if flow := strings.TrimSpace(c.GetHeader(HeaderClientFlow)); flow != "" {
+			attrs = append(attrs, slog.String("client_flow", flow))
+		}
+		if sess := strings.TrimSpace(c.GetHeader(HeaderSessionID)); sess != "" {
+			attrs = append(attrs, slog.String("session_id", sess))
 		}
 
 		if errStr := c.Errors.String(); errStr != "" {

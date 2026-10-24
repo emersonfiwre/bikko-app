@@ -69,7 +69,7 @@
        |
        v
 [ PostgreSQL 16 + PostGIS Database ]
- (Tables: users, bikkers, categories, services, service_photos, quote_requests, quote_negotiations, orders, reviews)
+ (Tables: users, bikkers, categories, services, service_photos, quote_requests, quote_negotiations, orders, reviews, client_reviews)
 ```
 
 ### Source Code Files Location Table

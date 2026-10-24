@@ -117,7 +117,7 @@ func (r *bikkerRepository) GetByID(ctx context.Context, idOrSlug string) (*domai
 		LEFT JOIN users u ON r.reviewer_id = u.id
 		LEFT JOIN services s ON r.service_id = s.id
 		LEFT JOIN bikkers b ON r.bikker_id = b.id
-		WHERE r.bikker_id = $1
+		WHERE r.bikker_id = $1 AND r.reviewer_id != r.bikker_id AND r.reviewer_id != b.user_id
 		ORDER BY r.created_at DESC
 	`
 	reviewRows, err := r.pool.Query(ctx, reviewsQuery, resp.ID)

@@ -343,8 +343,11 @@ func TestSolicitationController_UpdateStatus(t *testing.T) {
 		if updated.Status != "NEGOTIATING" {
 			t.Errorf("expected Status 'NEGOTIATING', got '%s'", updated.Status)
 		}
-		if updated.Price != 400.0 {
-			t.Errorf("expected Price 400.0, got %f", updated.Price)
+		if updated.Price != 350.0 {
+			t.Errorf("expected original proposal Price 350.0 to be preserved, got %f", updated.Price)
+		}
+		if updated.CounterOfferPrice == nil || *updated.CounterOfferPrice != 400.0 {
+			t.Errorf("expected CounterOfferPrice 400.0, got %+v", updated.CounterOfferPrice)
 		}
 		if updated.RenegotiationCount != 1 {
 			t.Errorf("expected RenegotiationCount 1, got %d", updated.RenegotiationCount)
