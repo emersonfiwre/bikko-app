@@ -32,9 +32,9 @@ import (
 	"google.golang.org/api/option"
 )
 
-func Run(name string) error {
+func Run(name string, defaultPorts ...string) error {
 	middleware.InitStructuredLogger()
-	cfg := config.LoadConfig()
+	cfg := config.LoadConfig(defaultPorts...)
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
@@ -99,12 +99,13 @@ func Run(name string) error {
 	}
 	auth := service.NewAuthService(users, jwt, verifier, service.WithLocalTestAccounts(cfg.LocalTestAccounts))
 	profile := service.NewProfileService(users, repository.NewProfileRepository(solicitations), service.WithAuthAndJWT(auth, jwt))
-	solicitationCtrl := controller.NewSolicitationController(services)
-	solicitationCtrl.SetPostgresRepository(solicitations)
+	solicitationUC := usecase.NewSolicitationUseCase(solicitations, services)
+	solicitationCtrl := controller.NewSolicitationControllerWithUseCase(solicitationUC)
 	storageCtrl := infraCtrl.NewStorageController(usecase.NewStorageUseCase(storageSvc))
+	providerCtrl := infraCtrl.NewProviderControllerWithUseCase(solicitationUC, services, bikkers)
 	r := router.SetupRouter(
 		controller.NewHealthController(pool.Ping), controller.NewAuthController(auth), controller.NewProfileController(profile), controller.NewUserController(users), controller.NewBootstrapController(redisSvc), solicitationCtrl, controller.NewBikkerController(bikkers),
-		infraCtrl.NewHomeController(usecase.NewHomeUseCase(categories, services, bikkers, redisSvc)), infraCtrl.NewReviewController(usecase.NewRatingUseCase(reviews)), storageCtrl, infraCtrl.NewSearchController(usecase.NewSearchUseCase(categories, services)), infraCtrl.NewProviderControllerWithDeps(solicitations, services, bikkers), middleware.AuthMiddleware(jwt, users),
+		infraCtrl.NewHomeController(usecase.NewHomeUseCase(categories, services, bikkers, redisSvc)), infraCtrl.NewReviewController(usecase.NewRatingUseCase(reviews)), storageCtrl, infraCtrl.NewSearchController(usecase.NewSearchUseCase(categories, services)), providerCtrl, middleware.AuthMiddleware(jwt, users),
 	)
 	// Firebase-less local testing preserves outbox events for inspection/replay.
 	workerDone := make(chan struct{})

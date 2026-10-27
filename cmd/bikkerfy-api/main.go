@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	if err := application.Run("Bikkerfy"); err != nil {
+	if err := application.Run("Bikkerfy", "8081"); err != nil {
 		slog.Error("API stopped", slog.Any("error", err))
 		os.Exit(1)
 	}

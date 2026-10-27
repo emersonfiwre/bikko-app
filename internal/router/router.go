@@ -46,8 +46,8 @@ func SetupRouter(
 	r.Use(middleware.SlogMiddleware())
 	r.Use(middleware.MetricsMiddleware())
 
-	// Initialize and apply IP Rate Limiter (5 requests per second, burst 10)
-	limiter := middleware.NewIPRateLimiter(rate.Limit(5), 10)
+	// Initialize and apply IP Rate Limiter (25 requests per second, burst 50)
+	limiter := middleware.NewIPRateLimiter(rate.Limit(25), 50)
 
 	r.Use(middleware.RateLimitMiddleware(limiter))
 

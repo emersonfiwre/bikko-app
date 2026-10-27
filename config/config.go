@@ -52,9 +52,13 @@ type Config struct {
 	FirebaseCredentialsFile string
 }
 
-func LoadConfig() *Config {
+func LoadConfig(defaultPorts ...string) *Config {
+	defaultPort := "8080"
+	if len(defaultPorts) > 0 && defaultPorts[0] != "" {
+		defaultPort = defaultPorts[0]
+	}
 	return &Config{
-		Port: getEnv("PORT", "8080"),
+		Port: getEnv("PORT", defaultPort),
 		Env:  getEnv("ENV", ""),
 
 		JWTSecret:         getEnv("JWT_SECRET", ""),

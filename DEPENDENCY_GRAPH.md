@@ -17,8 +17,8 @@ Both entrypoints expose the same modular API. The default local Compose runs one
 | POST /auth/check-phone,/auth/register,/auth/login | AuthController | AuthService + FirebaseTokenVerifier + NormalizePhone + JWTService | UserRepository; users/bikkers transaction |
 | GET/PUT/DELETE /profile; PUT /profile/photo | ProfileController | ProfileService | UserRepository + ProfileRepository(NewProfileRepository) → model.SolicitationRepository |
 | POST/DELETE /users/device-token | UserController | X-App-Type scope | optional UserDeviceRepository; user_devices |
-| GET/POST /solicitations, GET /solicitations/:id, PATCH or POST /solicitations/:id/status | SolicitationController | model.SolicitationRepository + authenticated actor | SolicitationPostgresRepository, requests/negotiations/orders/outbox |
-| GET /provider/feed,/provider/solicitations/:id; POST proposal/counter-offer/accept/reject | ProviderController | participant-scoped commands + professional role | same model.SolicitationRepository; row locks and idempotency |
+| GET/POST /solicitations, GET /solicitations/:id, PATCH or POST /solicitations/:id/status | SolicitationController | SolicitationUseCase + authenticated actor | SolicitationPostgresRepository, requests/negotiations/orders/outbox |
+| GET /provider/feed,/provider/solicitations/:id; POST proposal/counter-offer/accept/reject | ProviderController | SolicitationUseCase + professional role | same SolicitationPostgresRepository; row locks and idempotency |
 | GET/POST/PUT/DELETE /provider/portfolio | ProviderController | ServiceMutationRepository, ownership | ServiceRepository transaction; services,photos,soft deletion |
 | PUT /provider/profile | ProviderController | professional role separate from availability | BikkerProfileUpdater, users/bikkers/services transaction |
 | POST /provider/evaluations | ProviderController | completed contract + participant | SolicitationPostgresRepository, client_reviews/ratings/outbox transaction |

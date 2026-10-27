@@ -4,6 +4,7 @@ import (
 	"bikko-app/internal/domain"
 	"bikko-app/internal/infrastructure/http/middleware"
 	"bikko-app/internal/model"
+	"bikko-app/internal/usecase"
 	"context"
 	"errors"
 	"github.com/gin-gonic/gin"
@@ -13,6 +14,7 @@ import (
 )
 
 type ProviderController struct {
+	solUC       *usecase.SolicitationUseCase
 	solRepo     model.SolicitationRepository
 	serviceRepo domain.ServiceRepository
 	bikkerRepo  domain.BikkerRepository
@@ -20,7 +22,19 @@ type ProviderController struct {
 
 func NewProviderController() *ProviderController { return &ProviderController{} }
 func NewProviderControllerWithDeps(repo model.SolicitationRepository, services domain.ServiceRepository, bikkers domain.BikkerRepository) *ProviderController {
-	return &ProviderController{solRepo: repo, serviceRepo: services, bikkerRepo: bikkers}
+	return &ProviderController{
+		solUC:       usecase.NewSolicitationUseCase(repo, services),
+		solRepo:     repo,
+		serviceRepo: services,
+		bikkerRepo:  bikkers,
+	}
+}
+func NewProviderControllerWithUseCase(uc *usecase.SolicitationUseCase, services domain.ServiceRepository, bikkers domain.BikkerRepository) *ProviderController {
+	return &ProviderController{
+		solUC:       uc,
+		serviceRepo: services,
+		bikkerRepo:  bikkers,
+	}
 }
 func contractError(c *gin.Context, err error) {
 	status := http.StatusInternalServerError
@@ -63,7 +77,7 @@ func (p *ProviderController) actor(c *gin.Context) (string, bool) {
 	return actor, true
 }
 func (p *ProviderController) repository(c *gin.Context) bool {
-	if p.solRepo == nil {
+	if p.solUC == nil && p.solRepo == nil {
 		contractError(c, domain.ErrUnavailable)
 		return false
 	}
@@ -74,7 +88,13 @@ func (p *ProviderController) GetFeed(c *gin.Context) {
 	if !ok || !p.repository(c) {
 		return
 	}
-	items, err := p.solRepo.GetProviderFeed(c.Request.Context(), actor)
+	var items []domain.OpportunityLead
+	var err error
+	if p.solUC != nil {
+		items, err = p.solUC.GetProviderFeed(c.Request.Context(), actor)
+	} else {
+		items, err = p.solRepo.GetProviderFeed(c.Request.Context(), actor)
+	}
 	if err != nil {
 		contractError(c, err)
 		return
@@ -123,7 +143,13 @@ func (p *ProviderController) GetSolicitationDetails(c *gin.Context) {
 func (p *ProviderController) command(c *gin.Context, actor string, in model.SolicitationStatusUpdateInput) {
 	in.ActorID = actor
 	in.RequestKey = c.GetHeader("Idempotency-Key")
-	s, err := p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
+	var s *model.SolicitationItem
+	var err error
+	if p.solUC != nil {
+		s, err = p.solUC.GetSolicitationByID(c.Request.Context(), c.Param("id"), actor)
+	} else {
+		s, err = p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
+	}
 	if err != nil {
 		contractError(c, err)
 		return
@@ -132,7 +158,11 @@ func (p *ProviderController) command(c *gin.Context, actor string, in model.Soli
 		contractError(c, domain.ErrForbidden)
 		return
 	}
-	s, err = p.solRepo.UpdateSolicitationStatus(c.Request.Context(), c.Param("id"), in)
+	if p.solUC != nil {
+		s, err = p.solUC.UpdateStatus(c.Request.Context(), in, c.Param("id"))
+	} else {
+		s, err = p.solRepo.UpdateSolicitationStatus(c.Request.Context(), c.Param("id"), in)
+	}
 	if err != nil {
 		contractError(c, err)
 		return
@@ -343,7 +373,13 @@ func (p *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-	if err := p.solRepo.SubmitClientEvaluation(c.Request.Context(), req.SolicitationID, actor, req); err != nil {
+	var err error
+	if p.solUC != nil {
+		err = p.solUC.SubmitClientEvaluation(c.Request.Context(), actor, req.SolicitationID, req)
+	} else {
+		err = p.solRepo.SubmitClientEvaluation(c.Request.Context(), req.SolicitationID, actor, req)
+	}
+	if err != nil {
 		contractError(c, err)
 		return
 	}
