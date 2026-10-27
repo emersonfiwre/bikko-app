@@ -15,6 +15,7 @@ import (
 var (
 	ErrPhoneChangeRequiresFirebaseToken = errors.New("phone_change_requires_firebase_token")
 	ErrPhoneAlreadyInUse                = errors.New("phone_already_in_use")
+	ErrEmailAlreadyInUse                = errors.New("email_already_in_use")
 )
 
 type ProfileService interface {
@@ -155,9 +156,28 @@ func (s *profileService) UpdateProfileWithToken(ctx context.Context, userID, nam
 			return "", ErrPhoneAlreadyInUse
 		}
 	}
-	if err := s.userRepo.UpdateUser(ctx, userID, name, email, canonicalPhone); err != nil {
-		if errors.Is(err, domain.ErrConflict) {
+	cleanEmail := strings.TrimSpace(email)
+	if cleanEmail != "" && cleanEmail != user.Email {
+		existingEmail, err := s.userRepo.GetByEmail(ctx, cleanEmail)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return "", fmt.Errorf("profile: check email: %w", err)
+		}
+		if existingEmail != nil && existingEmail.ID != userID {
+			return "", ErrEmailAlreadyInUse
+		}
+	}
+	if err := s.userRepo.UpdateUser(ctx, userID, name, cleanEmail, canonicalPhone); err != nil {
+		if errors.Is(err, domain.ErrConflictEmail) {
+			return "", ErrEmailAlreadyInUse
+		}
+		if errors.Is(err, domain.ErrConflictPhone) {
 			return "", ErrPhoneAlreadyInUse
+		}
+		if errors.Is(err, domain.ErrConflict) {
+			if changed {
+				return "", ErrPhoneAlreadyInUse
+			}
+			return "", ErrEmailAlreadyInUse
 		}
 		return "", fmt.Errorf("profile: update identity: %w", err)
 	}

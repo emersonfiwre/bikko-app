@@ -61,7 +61,7 @@ func (p *ProfileController) DeleteAccount(c *gin.Context) {
 
 type UpdateProfileRequest struct {
 	Name          string `json:"name" binding:"required"`
-	Email         string `json:"email" binding:"required,email"`
+	Email         string `json:"email" binding:"omitempty,email"`
 	Phone         string `json:"phone"`
 	FirebaseToken string `json:"firebase_token"`
 }
@@ -92,6 +92,13 @@ func (p *ProfileController) UpdateProfile(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{
 				"error":   "PHONE_ALREADY_IN_USE",
 				"message": "Este número de telefone já está vinculado a outra conta",
+			})
+			return
+		}
+		if errors.Is(err, service.ErrEmailAlreadyInUse) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "EMAIL_ALREADY_IN_USE",
+				"message": "Este e-mail já está vinculado a outra conta",
 			})
 			return
 		}

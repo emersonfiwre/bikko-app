@@ -101,3 +101,13 @@ func TestPhoneAlreadyAssignedCannotBeTakenOver(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEmailAlreadyAssignedCannotBeTakenOver(t *testing.T) {
+	repo := newMockAuthUserRepo()
+	repo.users["11999990000"] = &domain.User{ID: "lucas", Phone: "11999990000", Email: "lucas@test.com"}
+	repo.users["11988880000"] = &domain.User{ID: "rafael", Phone: "11988880000", Email: "rafael@test.com"}
+	svc := NewProfileService(repo, nil)
+	if _, err := svc.UpdateProfileWithToken(context.Background(), "lucas", "Lucas", "rafael@test.com", "11999990000", ""); !errors.Is(err, ErrEmailAlreadyInUse) {
+		t.Fatalf("expected ErrEmailAlreadyInUse, got %v", err)
+	}
+}

@@ -67,8 +67,10 @@ func (m *mockAuthUserRepo) UpdateUser(ctx context.Context, id string, name, emai
 			delete(m.users, key)
 			u.FullName = name
 			u.Email = email
-			u.Phone = phone
-			m.users[phone] = u
+			if phone != "" {
+				u.Phone = phone
+			}
+			m.users[u.Phone] = u
 			return nil
 		}
 	}

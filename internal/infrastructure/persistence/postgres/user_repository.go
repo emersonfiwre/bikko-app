@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"bikko-app/internal/domain"
@@ -23,6 +24,13 @@ func identityDBError(operation string, err error) error {
 	}
 	var dbError *pgconn.PgError
 	if errors.As(err, &dbError) && dbError.Code == "23505" {
+		cName := strings.ToLower(dbError.ConstraintName)
+		if strings.Contains(cName, "email") {
+			return fmt.Errorf("%s: %w", operation, domain.ErrConflictEmail)
+		}
+		if strings.Contains(cName, "phone") {
+			return fmt.Errorf("%s: %w", operation, domain.ErrConflictPhone)
+		}
 		return fmt.Errorf("%s: %w", operation, domain.ErrConflict)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
@@ -131,11 +139,15 @@ func (r *userRepository) UpdateUser(ctx context.Context, id, name, email, phone 
 	if r.db == nil {
 		return domain.ErrUnavailable
 	}
-	canonical, err := domain.NormalizePhone(phone)
-	if err != nil {
-		return domain.ErrInvalidInput
+	var canonical *string
+	if strings.TrimSpace(phone) != "" {
+		p, err := domain.NormalizePhone(phone)
+		if err != nil {
+			return domain.ErrInvalidInput
+		}
+		canonical = &p
 	}
-	tag, err := r.db.Exec(ctx, `UPDATE users SET full_name=$1,email=$2,phone=$3,updated_at=NOW() WHERE id=$4 AND deleted_at IS NULL`, name, email, canonical, id)
+	tag, err := r.db.Exec(ctx, `UPDATE users SET full_name=$1,email=$2,phone=COALESCE($3, phone),updated_at=NOW() WHERE id=$4 AND deleted_at IS NULL`, name, email, canonical, id)
 	if err != nil {
 		return identityDBError("identity: update user", err)
 	}

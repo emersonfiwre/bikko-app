@@ -521,6 +521,80 @@ func TestProfileController_UpdateProfile(t *testing.T) {
 			t.Errorf("expected message 'Este número de telefone já está vinculado a outra conta', got %q", resp["message"])
 		}
 	})
+
+	t.Run("returns 409 Conflict if email is already in use", func(t *testing.T) {
+		svc := &fakeProfileService{
+			updateProfileWithTokenFunc: func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+				return "", service.ErrEmailAlreadyInUse
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfile(c)
+		})
+
+		payload := UpdateProfileRequest{
+			Name:  "Emerson Torres",
+			Email: "duplicated@bikko.com.br",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusConflict {
+			t.Fatalf("expected status 409, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp["error"] != "EMAIL_ALREADY_IN_USE" {
+			t.Errorf("expected error 'EMAIL_ALREADY_IN_USE', got %q", resp["error"])
+		}
+		if resp["message"] != "Este e-mail já está vinculado a outra conta" {
+			t.Errorf("expected message 'Este e-mail já está vinculado a outra conta', got %q", resp["message"])
+		}
+	})
+
+	t.Run("allows empty email for phone-only registered users", func(t *testing.T) {
+		var receivedEmail string
+		svc := &fakeProfileService{
+			updateProfileWithTokenFunc: func(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
+				receivedEmail = email
+				return "", nil
+			},
+		}
+
+		ctrl := NewProfileController(svc)
+		router := gin.New()
+		router.PUT("/profile", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfile(c)
+		})
+
+		payload := UpdateProfileRequest{
+			Name:  "Nome Sem Email",
+			Email: "",
+			Phone: "11999990000",
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPut, "/profile", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+		}
+		if receivedEmail != "" {
+			t.Errorf("expected empty email, got %q", receivedEmail)
+		}
+	})
 }
 
 func TestProfileController_UpdateProfilePhoto(t *testing.T) {
