@@ -129,7 +129,13 @@ func (p *ProviderController) GetSolicitationDetails(c *gin.Context) {
 	if !ok || !p.repository(c) {
 		return
 	}
-	s, err := p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
+	var s *model.SolicitationItem
+	var err error
+	if p.solUC != nil {
+		s, err = p.solUC.GetSolicitationByID(c.Request.Context(), c.Param("id"), actor)
+	} else {
+		s, err = p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
+	}
 	if err != nil {
 		contractError(c, err)
 		return

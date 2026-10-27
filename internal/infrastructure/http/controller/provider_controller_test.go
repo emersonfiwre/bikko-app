@@ -3,6 +3,7 @@ package controller
 import (
 	"bikko-app/internal/domain"
 	"bikko-app/internal/model"
+	"bikko-app/internal/usecase"
 	"context"
 	"github.com/gin-gonic/gin"
 	"net/http/httptest"
@@ -42,6 +43,37 @@ func providerRequest(ctrl *ProviderController, actor string, isProvider bool, ac
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
+}
+
+func providerDetailsRequest(ctrl *ProviderController, actor string) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("userID", actor)
+		c.Set("isBikker", true)
+	})
+	r.GET("/provider/:id", ctrl.GetSolicitationDetails)
+	req := httptest.NewRequest("GET", "/provider/solicitation-1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestProviderDetailsUsesInjectedUseCaseWithoutRepositoryField(t *testing.T) {
+	repo := &providerRepositoryStub{item: model.SolicitationItem{
+		ID:         "solicitation-1",
+		ProviderID: "provider",
+		Status:     "PENDING",
+	}}
+	ctrl := NewProviderControllerWithUseCase(usecase.NewSolicitationUseCase(repo, nil), nil, nil)
+
+	w := providerDetailsRequest(ctrl, "provider")
+	if w.Code != 200 {
+		t.Fatalf("expected details through injected use case, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.actor != "provider" {
+		t.Fatalf("expected authenticated provider to reach repository through use case, got %q", repo.actor)
+	}
 }
 func TestProviderActionsRequireProfessionalRole(t *testing.T) {
 	ctrl := NewProviderController()
