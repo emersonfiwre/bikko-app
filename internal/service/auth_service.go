@@ -104,25 +104,18 @@ func (s *authService) verifiedPhone(ctx context.Context, idToken, requestedPhone
 }
 
 func (s *authService) CheckPhone(ctx context.Context, req model.CheckPhoneRequest) (*model.CheckPhoneResponse, error) {
-	phone, err := domain.NormalizePhone(req.Phone)
-	if err != nil {
+	if _, err := domain.NormalizePhone(req.Phone); err != nil {
 		return nil, ErrInvalidCredentials
 	}
-	user, err := s.repo.GetByPhone(ctx, phone)
-	if errors.Is(err, domain.ErrNotFound) {
-		return nil, ErrUserNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("auth: find phone: %w", err)
-	}
-	if user == nil {
-		return nil, ErrUserNotFound
-	}
-	response := &model.CheckPhoneResponse{Exists: true, IsBikker: user.IsBikker, Message: "Número cadastrado"}
-	if strings.EqualFold(req.AppType, "bikker") && !user.IsBikker {
-		return response, ErrClientNeedsBikkerRegistration
-	}
-	return response, nil
+	// This endpoint runs before OTP verification in both apps. It must not query
+	// or reveal whether a phone is registered or which role it has. The client
+	// proceeds with OTP; Login/Register return account-specific outcomes only
+	// after Firebase has verified control of the number.
+	return &model.CheckPhoneResponse{
+		Exists:   true,
+		IsBikker: false,
+		Message:  "Continue com a verificação do telefone",
+	}, nil
 }
 
 func registrationBikker(req model.RegisterRequest) (*domain.Bikker, error) {

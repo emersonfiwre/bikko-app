@@ -55,7 +55,7 @@ func TestIdentityPhoneUnicityAndRealClientLocation(t *testing.T) {
 	repo := NewUserRepository(pool)
 	user := identityFixture(t, pool)
 	_, err := repo.CreateUser(ctx, &domain.User{FullName: "Duplicate", Email: uuid.NewString() + "@test.invalid", Phone: "+55" + user.Phone})
-	if !errors.Is(err, domain.ErrConflict) {
+	if !errors.Is(err, domain.ErrConflictPhone) || !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("same canonical phone accepted: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE users SET location_name='Pinheiros',location_geom=ST_SetSRID(ST_MakePoint(-46.6823,-23.5641),4326)::geography WHERE id=$1`, user.ID); err != nil {

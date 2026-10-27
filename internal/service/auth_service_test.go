@@ -198,14 +198,28 @@ func TestLocalAccountsAreExplicitAndBoundToOnlyTheirOwnPhones(t *testing.T) {
 		t.Fatal("local identity enabled without option")
 	}
 }
-func TestCheckPhoneDoesNotSeedOrHideDatabaseFailure(t *testing.T) {
+func TestCheckPhoneDoesNotEnumerateOrQueryAccounts(t *testing.T) {
 	repo := newMockAuthUserRepo()
+	repo.users["11999990000"] = &domain.User{ID: "lucas", Phone: "11999990000", IsBikker: false}
+	repo.users["11988880000"] = &domain.User{ID: "rafael", Phone: "11988880000", IsBikker: true}
 	svc := NewAuthService(repo, security.NewJWTService("test-secret"), nil)
-	if _, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{Phone: "11999990000"}); !errors.Is(err, ErrUserNotFound) {
-		t.Fatal(err)
-	}
-	if len(repo.users) != 0 {
-		t.Fatal("phone discovery must be read-only")
+	var first *model.CheckPhoneResponse
+	for _, req := range []model.CheckPhoneRequest{
+		{Phone: "11999990000", AppType: "client"},
+		{Phone: "11988880000", AppType: "bikker"},
+		{Phone: "11977776666", AppType: "client"},
+	} {
+		response, err := svc.CheckPhone(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first == nil {
+			first = response
+			continue
+		}
+		if *response != *first {
+			t.Fatalf("phone or role leaked through check-phone: first=%+v current=%+v", first, response)
+		}
 	}
 }
 func TestLoginUsesCanonicalVerifiedPhone(t *testing.T) {

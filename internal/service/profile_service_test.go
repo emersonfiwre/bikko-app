@@ -90,6 +90,23 @@ func TestSamePhoneDoesNotRequireOtpAndBlankDoesNotClearIt(t *testing.T) {
 		t.Fatal("phone was cleared")
 	}
 }
+
+func TestBlankEmailDoesNotClearExistingEmail(t *testing.T) {
+	repo := newMockAuthUserRepo()
+	repo.users["11999990000"] = &domain.User{
+		ID:       "lucas",
+		Phone:    "11999990000",
+		Email:    "lucas@example.test",
+		FullName: "Lucas",
+	}
+	svc := NewProfileService(repo, nil)
+	if _, err := svc.UpdateProfileWithToken(context.Background(), "lucas", "Lucas Updated", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := repo.users["11999990000"].Email; got != "lucas@example.test" {
+		t.Fatalf("blank email cleared existing address: %q", got)
+	}
+}
 func TestPhoneAlreadyAssignedCannotBeTakenOver(t *testing.T) {
 	repo := newMockAuthUserRepo()
 	repo.users["11999990000"] = &domain.User{ID: "lucas", Phone: "11999990000"}

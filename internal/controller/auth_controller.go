@@ -64,24 +64,6 @@ func (a *AuthController) CheckPhone(c *gin.Context) {
 
 	resp, err := a.authService.CheckPhone(c.Request.Context(), req)
 	if err != nil {
-		if errors.Is(err, service.ErrUserNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"code":      "USER_NOT_FOUND",
-				"exists":    false,
-				"is_bikker": false,
-				"message":   "Número não encontrado. Realize seu cadastro para continuar.",
-			})
-			return
-		}
-		if errors.Is(err, service.ErrClientNeedsBikkerRegistration) {
-			c.JSON(http.StatusForbidden, gin.H{
-				"code":      "CLIENT_NEEDS_BIKKER_REGISTRATION",
-				"exists":    true,
-				"is_bikker": false,
-				"message":   "Este número possui apenas cadastro de Cliente. Cadastre suas informações de Bikker para continuar.",
-			})
-			return
-		}
 		if errors.Is(err, service.ErrInvalidCredentials) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    "INVALID_CREDENTIALS",

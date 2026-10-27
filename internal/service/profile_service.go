@@ -157,6 +157,11 @@ func (s *profileService) UpdateProfileWithToken(ctx context.Context, userID, nam
 		}
 	}
 	cleanEmail := strings.TrimSpace(email)
+	// Empty/omitted email is a no-op. This preserves the existing address and
+	// avoids turning multiple profiles into the same unique empty-string value.
+	if cleanEmail == "" {
+		cleanEmail = user.Email
+	}
 	if cleanEmail != "" && cleanEmail != user.Email {
 		existingEmail, err := s.userRepo.GetByEmail(ctx, cleanEmail)
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {

@@ -191,7 +191,7 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 func TestAuthController_CheckPhone(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	t.Run("returns 404 USER_NOT_FOUND for unregistered number", func(t *testing.T) {
+	t.Run("returns a generic response for an unregistered number", func(t *testing.T) {
 		repo := &fakeAuthUserRepo{}
 		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
@@ -208,13 +208,13 @@ func TestAuthController_CheckPhone(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("expected 404 Not Found, got %d: %s", w.Code, w.Body.String())
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
 		}
 
 		var resp map[string]interface{}
 		_ = json.Unmarshal(w.Body.Bytes(), &resp)
-		if resp["code"] != "USER_NOT_FOUND" || resp["exists"] != false {
+		if resp["exists"] != true || resp["is_bikker"] != false {
 			t.Errorf("unexpected response body: %+v", resp)
 		}
 	})
@@ -254,7 +254,7 @@ func TestAuthController_CheckPhone(t *testing.T) {
 		}
 	})
 
-	t.Run("returns 403 CLIENT_NEEDS_BIKKER_REGISTRATION for Client number on bikker app", func(t *testing.T) {
+	t.Run("does not reveal client role to provider app", func(t *testing.T) {
 		repo := &fakeAuthUserRepo{
 			byPhone: &domain.User{
 				ID:       "client-1",
@@ -278,18 +278,18 @@ func TestAuthController_CheckPhone(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("expected 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
 		}
 
 		var resp map[string]interface{}
 		_ = json.Unmarshal(w.Body.Bytes(), &resp)
-		if resp["code"] != "CLIENT_NEEDS_BIKKER_REGISTRATION" || resp["exists"] != true || resp["is_bikker"] != false {
+		if resp["exists"] != true || resp["is_bikker"] != false {
 			t.Errorf("unexpected response body: %+v", resp)
 		}
 	})
 
-	t.Run("returns 200 OK for Bikker number on BOTH bikker and client apps", func(t *testing.T) {
+	t.Run("does not reveal provider role on either app", func(t *testing.T) {
 		repo := &fakeAuthUserRepo{
 			byPhone: &domain.User{
 				ID:       "bikker-1",
@@ -320,7 +320,7 @@ func TestAuthController_CheckPhone(t *testing.T) {
 
 		var respBikker map[string]interface{}
 		_ = json.Unmarshal(wBikker.Body.Bytes(), &respBikker)
-		if respBikker["exists"] != true || respBikker["is_bikker"] != true {
+		if respBikker["exists"] != true || respBikker["is_bikker"] != false {
 			t.Errorf("unexpected bikker response: %+v", respBikker)
 		}
 
@@ -340,7 +340,7 @@ func TestAuthController_CheckPhone(t *testing.T) {
 
 		var respClient map[string]interface{}
 		_ = json.Unmarshal(wClient.Body.Bytes(), &respClient)
-		if respClient["exists"] != true || respClient["is_bikker"] != true {
+		if respClient["exists"] != true || respClient["is_bikker"] != false {
 			t.Errorf("unexpected client response: %+v", respClient)
 		}
 	})

@@ -40,7 +40,7 @@ func TestFreshAndLegacyMigrationsAndEmptyLocalFixtures(t *testing.T) {
 		}
 		// PostGIS is shared in public; migration creates application objects in the isolated schema.
 		if legacyState != "fresh" {
-			initial, err := schema.ReadFile("000001_init_schema.up.sql")
+			initial, err := os.ReadFile("testdata/legacy_schema.sql")
 			if err != nil {
 				t.Fatal(err)
 			}

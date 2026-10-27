@@ -15,7 +15,6 @@ import (
 
 type ProviderController struct {
 	solUC       *usecase.SolicitationUseCase
-	solRepo     model.SolicitationRepository
 	serviceRepo domain.ServiceRepository
 	bikkerRepo  domain.BikkerRepository
 }
@@ -24,7 +23,6 @@ func NewProviderController() *ProviderController { return &ProviderController{} 
 func NewProviderControllerWithDeps(repo model.SolicitationRepository, services domain.ServiceRepository, bikkers domain.BikkerRepository) *ProviderController {
 	return &ProviderController{
 		solUC:       usecase.NewSolicitationUseCase(repo, services),
-		solRepo:     repo,
 		serviceRepo: services,
 		bikkerRepo:  bikkers,
 	}
@@ -77,7 +75,7 @@ func (p *ProviderController) actor(c *gin.Context) (string, bool) {
 	return actor, true
 }
 func (p *ProviderController) repository(c *gin.Context) bool {
-	if p.solUC == nil && p.solRepo == nil {
+	if p.solUC == nil {
 		contractError(c, domain.ErrUnavailable)
 		return false
 	}
@@ -88,13 +86,7 @@ func (p *ProviderController) GetFeed(c *gin.Context) {
 	if !ok || !p.repository(c) {
 		return
 	}
-	var items []domain.OpportunityLead
-	var err error
-	if p.solUC != nil {
-		items, err = p.solUC.GetProviderFeed(c.Request.Context(), actor)
-	} else {
-		items, err = p.solRepo.GetProviderFeed(c.Request.Context(), actor)
-	}
+	items, err := p.solUC.GetProviderFeed(c.Request.Context(), actor)
 	if err != nil {
 		contractError(c, err)
 		return
@@ -129,13 +121,7 @@ func (p *ProviderController) GetSolicitationDetails(c *gin.Context) {
 	if !ok || !p.repository(c) {
 		return
 	}
-	var s *model.SolicitationItem
-	var err error
-	if p.solUC != nil {
-		s, err = p.solUC.GetSolicitationByID(c.Request.Context(), c.Param("id"), actor)
-	} else {
-		s, err = p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
-	}
+	s, err := p.solUC.GetSolicitationByID(c.Request.Context(), c.Param("id"), actor)
 	if err != nil {
 		contractError(c, err)
 		return
@@ -146,16 +132,13 @@ func (p *ProviderController) GetSolicitationDetails(c *gin.Context) {
 	}
 	c.JSON(200, buildQuoteDetails(s))
 }
-func (p *ProviderController) command(c *gin.Context, actor string, in model.SolicitationStatusUpdateInput) {
-	in.ActorID = actor
-	in.RequestKey = c.GetHeader("Idempotency-Key")
-	var s *model.SolicitationItem
-	var err error
-	if p.solUC != nil {
-		s, err = p.solUC.GetSolicitationByID(c.Request.Context(), c.Param("id"), actor)
-	} else {
-		s, err = p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
-	}
+func (p *ProviderController) command(
+	c *gin.Context,
+	actor string,
+	run func(context.Context, string, string, string) (*model.SolicitationItem, error),
+) {
+	id := c.Param("id")
+	s, err := p.solUC.GetSolicitationByID(c.Request.Context(), id, actor)
 	if err != nil {
 		contractError(c, err)
 		return
@@ -164,11 +147,7 @@ func (p *ProviderController) command(c *gin.Context, actor string, in model.Soli
 		contractError(c, domain.ErrForbidden)
 		return
 	}
-	if p.solUC != nil {
-		s, err = p.solUC.UpdateStatus(c.Request.Context(), in, c.Param("id"))
-	} else {
-		s, err = p.solRepo.UpdateSolicitationStatus(c.Request.Context(), c.Param("id"), in)
-	}
+	s, err = run(c.Request.Context(), actor, id, c.GetHeader("Idempotency-Key"))
 	if err != nil {
 		contractError(c, err)
 		return
@@ -185,11 +164,9 @@ func (p *ProviderController) SubmitProposal(c *gin.Context) {
 		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-	in := model.SolicitationStatusUpdateInput{Status: "BUDGET_RECEIVED", CounterOfferPrice: &req.Price, CounterOfferMessage: &req.Note}
-	if req.Accepted || req.AcceptCounterOffer {
-		in = model.SolicitationStatusUpdateInput{Status: "ACTIVE"}
-	}
-	p.command(c, actor, in)
+	p.command(c, actor, func(ctx context.Context, actor, id, requestKey string) (*model.SolicitationItem, error) {
+		return p.solUC.SubmitProposal(ctx, actor, id, requestKey, req.Price, req.Note, req.Accepted || req.AcceptCounterOffer)
+	})
 }
 func (p *ProviderController) SubmitCounterOffer(c *gin.Context) {
 	actor, ok := p.actor(c)
@@ -209,18 +186,16 @@ func (p *ProviderController) SubmitCounterOffer(c *gin.Context) {
 	if note == "" {
 		note = req.Note
 	}
-	in := model.SolicitationStatusUpdateInput{Status: "NEGOTIATING", CounterOfferPrice: &price, CounterOfferMessage: &note}
-	if req.Accepted || req.AcceptCounterOffer {
-		in = model.SolicitationStatusUpdateInput{Status: "ACTIVE"}
-	}
-	p.command(c, actor, in)
+	p.command(c, actor, func(ctx context.Context, actor, id, requestKey string) (*model.SolicitationItem, error) {
+		return p.solUC.SubmitCounterOffer(ctx, actor, id, requestKey, price, note, req.Accepted || req.AcceptCounterOffer)
+	})
 }
 func (p *ProviderController) AcceptCounterOffer(c *gin.Context) {
 	actor, ok := p.actor(c)
 	if !ok || !p.repository(c) {
 		return
 	}
-	p.command(c, actor, model.SolicitationStatusUpdateInput{Status: "ACTIVE"})
+	p.command(c, actor, p.solUC.AcceptCounterOffer)
 }
 func (p *ProviderController) RejectSolicitation(c *gin.Context) {
 	actor, ok := p.actor(c)
@@ -239,7 +214,9 @@ func (p *ProviderController) RejectSolicitation(c *gin.Context) {
 	if reason == "" {
 		reason = req.ReasonChip
 	}
-	p.command(c, actor, model.SolicitationStatusUpdateInput{Status: "CANCELLED", CancellationReason: &reason})
+	p.command(c, actor, func(ctx context.Context, actor, id, requestKey string) (*model.SolicitationItem, error) {
+		return p.solUC.RejectSolicitation(ctx, actor, id, requestKey, reason)
+	})
 }
 func (p *ProviderController) GetPortfolio(c *gin.Context) {
 	actor, ok := p.actor(c)
@@ -379,12 +356,7 @@ func (p *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-	var err error
-	if p.solUC != nil {
-		err = p.solUC.SubmitClientEvaluation(c.Request.Context(), actor, req.SolicitationID, req)
-	} else {
-		err = p.solRepo.SubmitClientEvaluation(c.Request.Context(), req.SolicitationID, actor, req)
-	}
+	err := p.solUC.SubmitClientEvaluation(c.Request.Context(), actor, req.SolicitationID, req)
 	if err != nil {
 		contractError(c, err)
 		return
