@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	firebaseAuth "firebase.google.com/go/v4/auth"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"bikko-app/internal/domain"
@@ -35,18 +37,21 @@ func (f *fakeAuthUserRepo) GetByEmail(ctx context.Context, email string) (*domai
 	if f.byEmail != nil && f.byEmail.Email == email {
 		return f.byEmail, nil
 	}
-	return nil, errors.New("not found")
+	return nil, domain.ErrNotFound
 }
 
 func (f *fakeAuthUserRepo) GetByPhone(ctx context.Context, phone string) (*domain.User, error) {
-	if f.byPhone != nil && f.byPhone.Phone == phone {
-		return f.byPhone, nil
+	if f.byPhone != nil {
+		canonical, _ := domain.NormalizePhone(f.byPhone.Phone)
+		if canonical == phone {
+			return f.byPhone, nil
+		}
 	}
-	return nil, errors.New("not found")
+	return nil, domain.ErrNotFound
 }
 
 func (f *fakeAuthUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	return nil, errors.New("not found")
+	return nil, domain.ErrNotFound
 }
 
 func (f *fakeAuthUserRepo) UpdateUser(ctx context.Context, id string, name, email, phone string) error {
@@ -97,7 +102,7 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 				Phone:    "+5511999990000",
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -107,6 +112,7 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 			"full_name": "New User",
 			"email":     "new@bikko.com",
 			"phone":     "+5511999990000",
+			"id_token":  "verified_11999990000",
 		})
 		req, _ := http.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -132,7 +138,7 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 				Email:    "dup@bikko.com",
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -142,6 +148,7 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 			"full_name": "New User",
 			"email":     "dup@bikko.com",
 			"phone":     "+5511988887777",
+			"id_token":  "verified_11988887777",
 		})
 		req, _ := http.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -156,10 +163,10 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 	t.Run("returns 409 Conflict when CreateUser returns unique constraint 23505 error", func(t *testing.T) {
 		repo := &fakeAuthUserRepo{
 			create: func(ctx context.Context, user *domain.User) (*domain.User, error) {
-				return nil, errors.New("ERROR: duplicate key value violates unique constraint (SQLSTATE 23505)")
+				return nil, domain.ErrConflict
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -168,6 +175,7 @@ func TestAuthController_RegisterDuplicateDetection(t *testing.T) {
 		body, _ := json.Marshal(map[string]interface{}{
 			"full_name": "New User",
 			"email":     "unique@bikko.com",
+			"id_token":  "verified_11999990000",
 		})
 		req, _ := http.NewRequest(http.MethodPost, "/auth/register", bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -185,7 +193,7 @@ func TestAuthController_CheckPhone(t *testing.T) {
 
 	t.Run("returns 404 USER_NOT_FOUND for unregistered number", func(t *testing.T) {
 		repo := &fakeAuthUserRepo{}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -220,7 +228,7 @@ func TestAuthController_CheckPhone(t *testing.T) {
 				IsBikker: false,
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -255,7 +263,7 @@ func TestAuthController_CheckPhone(t *testing.T) {
 				IsBikker: false,
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -290,7 +298,7 @@ func TestAuthController_CheckPhone(t *testing.T) {
 				IsBikker: true,
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -351,7 +359,7 @@ func TestAuthController_RegisterUpgradeToBikker(t *testing.T) {
 				IsBikker: false,
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
@@ -360,6 +368,9 @@ func TestAuthController_RegisterUpgradeToBikker(t *testing.T) {
 		body, _ := json.Marshal(map[string]interface{}{
 			"full_name":        "Cliente Existente",
 			"phone":            "11999990000",
+			"id_token":         "verified_11999990000",
+			"latitude":         -23.56,
+			"longitude":        -46.69,
 			"is_bikker":        true,
 			"profession":       "Pintor Profissional",
 			"experience_years": "5 anos",
@@ -396,14 +407,14 @@ func TestAuthController_Login(t *testing.T) {
 				IsBikker: false,
 			},
 		}
-		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), nil)
+		authSvc := service.NewAuthService(repo, security.NewJWTService("secret"), controllerPhoneVerifier{})
 		ctrl := NewAuthController(authSvc)
 
 		r := gin.New()
 		r.POST("/auth/login", ctrl.Login)
 
 		body, _ := json.Marshal(map[string]interface{}{
-			"id_token": "test_token",
+			"id_token": "verified_11999990000",
 			"phone":    "11999990000",
 			"app_type": "bikker",
 		})
@@ -424,3 +435,24 @@ func TestAuthController_Login(t *testing.T) {
 	})
 }
 
+type controllerPhoneVerifier struct{}
+
+func (controllerPhoneVerifier) VerifyIDToken(ctx context.Context, token string) (*firebaseAuth.Token, error) {
+	if !strings.HasPrefix(token, "verified_") {
+		return nil, errors.New("invalid test proof")
+	}
+	return &firebaseAuth.Token{UID: "verified-user", Claims: map[string]interface{}{"phone_number": "+55" + strings.TrimPrefix(token, "verified_")}}, nil
+}
+func TestAuthControllerUnverifiedRegistrationCannotUpgradeClient(t *testing.T) {
+	repo := &fakeAuthUserRepo{byPhone: &domain.User{ID: "victim", Phone: "11999990000"}}
+	ctrl := NewAuthController(service.NewAuthService(repo, security.NewJWTService("test-secret"), nil))
+	r := gin.New()
+	r.POST("/auth/register", ctrl.Register)
+	req := httptest.NewRequest("POST", "/auth/register", strings.NewReader(`{"full_name":"Caller","phone":"11999990000","is_bikker":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized || repo.byPhone.IsBikker {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}

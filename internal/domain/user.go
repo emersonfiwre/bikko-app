@@ -6,6 +6,9 @@ import (
 )
 
 type User struct {
+	LocationName         string    `json:"location_name,omitempty"`
+	Latitude             *float64  `json:"latitude,omitempty"`
+	Longitude            *float64  `json:"longitude,omitempty"`
 	ID                   string    `json:"id"`
 	FullName             string    `json:"full_name"`
 	Email                string    `json:"email"`
@@ -48,4 +51,11 @@ type UserRepository interface {
 	UpdateDeviceToken(ctx context.Context, id string, token *string) error
 	GetDeviceToken(ctx context.Context, id string) (string, error)
 	UpgradeToBikker(ctx context.Context, userID string, bikker *Bikker) (*User, error)
+}
+
+// UserDeviceRepository tracks each application installation independently.
+type UserDeviceRepository interface {
+	RegisterDevice(ctx context.Context, userID, appType, token string) error
+	DeleteDevice(ctx context.Context, userID, appType, token string) error
+	GetDeviceTokens(ctx context.Context, userID string) ([]string, error)
 }

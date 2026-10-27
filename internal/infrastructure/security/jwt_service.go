@@ -2,6 +2,7 @@ package security
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -23,6 +24,9 @@ func NewJWTService(secret string) JWTService {
 }
 
 func (s *jwtService) GenerateToken(userID string) (string, error) {
+	if strings.TrimSpace(userID) == "" {
+		return "", fmt.Errorf("user id required")
+	}
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(), // 7 days expiration
@@ -34,11 +38,11 @@ func (s *jwtService) GenerateToken(userID string) (string, error) {
 
 func (s *jwtService) ValidateToken(tokenString string) (string, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return s.secretKey, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 
 	if err != nil {
 		return "", err
@@ -46,7 +50,7 @@ func (s *jwtService) ValidateToken(tokenString string) (string, error) {
 
 	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 		userID, ok := claims["user_id"].(string)
-		if !ok {
+		if !ok || strings.TrimSpace(userID) == "" {
 			return "", fmt.Errorf("user_id not found in token")
 		}
 		return userID, nil

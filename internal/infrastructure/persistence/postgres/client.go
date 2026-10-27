@@ -18,6 +18,7 @@ func NewPostgresPool(cfg *config.Config) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("falha ao parsear DSN do Postgres: %w", err)
 	}
 
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = cfg.DBSchema
 	maxConns := int32(cfg.DBMaxConns)
 	if maxConns <= 0 {
 		maxConns = 25

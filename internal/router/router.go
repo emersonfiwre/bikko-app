@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"bikko-app/internal/controller"
 	infraCtrl "bikko-app/internal/infrastructure/http/controller"
@@ -28,7 +29,16 @@ func SetupRouter(
 	authMiddleware gin.HandlerFunc,
 ) *gin.Engine {
 	r := gin.New()
+	if err := r.SetTrustedProxies(nil); err != nil {
+		panic(err)
+	}
 	r.Use(gin.Recovery())
+	r.Use(func(c *gin.Context) {
+		if c.Request.Body != nil && !strings.HasPrefix(c.Request.URL.Path, "/api/v1/local-storage/") {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
+		}
+		c.Next()
+	})
 	r.Use(middleware.SecurityHeadersMiddleware())
 
 	// Observability Middlewares (Correlation ID, Structured JSON Logging, Prometheus Metrics)
@@ -38,11 +48,17 @@ func SetupRouter(
 
 	// Initialize and apply IP Rate Limiter (5 requests per second, burst 10)
 	limiter := middleware.NewIPRateLimiter(rate.Limit(5), 10)
-	limiter.Cleanup()
+
 	r.Use(middleware.RateLimitMiddleware(limiter))
 
 	// Prometheus Metrics Endpoint
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// Local development receives and persists real files through signed capabilities.
+	if storageCtrl != nil && storageCtrl.LocalEnabled() {
+		r.PUT("/api/v1/local-storage/*key", storageCtrl.LocalObject)
+		r.GET("/api/v1/local-storage/*key", storageCtrl.LocalObject)
+	}
 
 	// Root Route
 	r.GET("/", func(c *gin.Context) {
@@ -56,6 +72,7 @@ func SetupRouter(
 	v1 := r.Group("/api/v1")
 	{
 		v1.GET("/health", healthCtrl.CheckHealth)
+		v1.GET("/ready", healthCtrl.CheckReady)
 		v1.GET("/bootstrap", bootstrapCtrl.GetBootstrap)
 
 		// Home & Services Routes
@@ -82,9 +99,7 @@ func SetupRouter(
 
 		// Provider (Bikkerfy) Endpoints (JWT Protected when authMiddleware != nil)
 		provider := v1.Group("/provider")
-		if authMiddleware != nil {
-			provider.Use(authMiddleware)
-		}
+		provider.Use(requiredAuth(authMiddleware), middleware.RequireProvider())
 		{
 			provider.GET("/feed", providerCtrl.GetFeed)
 			provider.GET("/solicitations/:id", providerCtrl.GetSolicitationDetails)
@@ -103,9 +118,7 @@ func SetupRouter(
 
 		// Protected Routes (Require JWT)
 		protected := v1.Group("/")
-		if authMiddleware != nil {
-			protected.Use(authMiddleware)
-		}
+		protected.Use(requiredAuth(authMiddleware))
 		{
 			// Storage (Cloudflare R2 Pre-signed URLs)
 			protected.POST("/storage/upload-url", storageCtrl.GenerateUploadURL)
@@ -137,4 +150,11 @@ func SetupRouter(
 	}
 
 	return r
+}
+
+func requiredAuth(auth gin.HandlerFunc) gin.HandlerFunc {
+	if auth != nil {
+		return auth
+	}
+	return func(c *gin.Context) { c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "UNAUTHORIZED"}) }
 }

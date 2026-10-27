@@ -2,399 +2,276 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"bikko-app/internal/domain"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type userRepository struct {
-	db *pgxpool.Pool
+type userRepository struct{ db *pgxpool.Pool }
+
+func NewUserRepository(db *pgxpool.Pool) domain.UserRepository { return &userRepository{db: db} }
+
+func identityDBError(operation string, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	var dbError *pgconn.PgError
+	if errors.As(err, &dbError) && dbError.Code == "23505" {
+		return fmt.Errorf("%s: %w", operation, domain.ErrConflict)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
-func NewUserRepository(db *pgxpool.Pool) domain.UserRepository {
-	return &userRepository{db: db}
+func rollbackIdentity(ctx context.Context, tx pgx.Tx) {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := tx.Rollback(rollbackCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		slog.Error("identity transaction rollback failed", slog.Any("error", err))
+	}
+}
+
+const userColumns = `id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), COALESCE(profile_photo_url, ''), rating, total_ratings, is_bikker, COALESCE(device_token, ''), created_at, updated_at, COALESCE(location_name, ''), ST_Y(location_geom::geometry), ST_X(location_geom::geometry)`
+
+func scanIdentity(row pgx.Row) (*domain.User, error) {
+	user := &domain.User{}
+	err := row.Scan(&user.ID, &user.FullName, &user.Email, &user.Phone, &user.CPF, &user.ProfilePhotoURL, &user.Rating, &user.TotalRatings, &user.IsBikker, &user.DeviceToken, &user.CreatedAt, &user.UpdatedAt, &user.LocationName, &user.Latitude, &user.Longitude)
+	if err != nil {
+		return nil, identityDBError("identity: read user", err)
+	}
+	return user, nil
 }
 
 func (r *userRepository) CreateUser(ctx context.Context, user *domain.User) (*domain.User, error) {
 	if r.db == nil {
-		return nil, fmt.Errorf("database connection pool is not initialized")
+		return nil, domain.ErrUnavailable
 	}
-
-	query := `
-		INSERT INTO users (full_name, email, phone, cpf, profile_photo_url, is_bikker)
-		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($5, ''), $6)
-		RETURNING id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), COALESCE(profile_photo_url, ''), rating, total_ratings, is_bikker, created_at, updated_at
-	`
-
-	err := r.db.QueryRow(ctx, query,
-		user.FullName,
-		user.Email,
-		user.Phone,
-		user.CPF,
-		user.ProfilePhotoURL,
-		user.IsBikker,
-	).Scan(
-		&user.ID,
-		&user.FullName,
-		&user.Email,
-		&user.Phone,
-		&user.CPF,
-		&user.ProfilePhotoURL,
-		&user.Rating,
-		&user.TotalRatings,
-		&user.IsBikker,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-
+	if user == nil {
+		return nil, domain.ErrInvalidInput
+	}
+	phone, err := domain.NormalizePhone(user.Phone)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
+		return nil, domain.ErrInvalidInput
 	}
-
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, identityDBError("identity: begin registration", err)
+	}
+	defer rollbackIdentity(ctx, tx)
+	created, err := scanIdentity(tx.QueryRow(ctx, `INSERT INTO users (full_name,email,phone,cpf,profile_photo_url,is_bikker) VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6) RETURNING `+userColumns, user.FullName, user.Email, phone, user.CPF, user.ProfilePhotoURL, user.IsBikker))
+	if err != nil {
+		return nil, err
+	}
 	if user.IsBikker {
-		profession := "Prestador de Serviços"
-		expYears := "1 ano"
-		desc := ""
-		locName := "São Paulo, SP"
-		lat := -23.55052
-		lon := -46.63330
-		if user.Bikker != nil {
-			if user.Bikker.Profession != "" {
-				profession = user.Bikker.Profession
-			}
-			if user.Bikker.ExperienceYears != "" {
-				expYears = user.Bikker.ExperienceYears
-			}
-			desc = user.Bikker.Description
-			if user.Bikker.LocationName != "" {
-				locName = user.Bikker.LocationName
-			}
-			if user.Bikker.Latitude != 0 {
-				lat = user.Bikker.Latitude
-			}
-			if user.Bikker.Longitude != 0 {
-				lon = user.Bikker.Longitude
-			}
+		if user.Bikker == nil {
+			return nil, domain.ErrInvalidInput
 		}
-
-		bikkerQuery := `
-			INSERT INTO bikkers (id, profession, experience_years, description, location_name, location_geom, is_active)
-			VALUES ($1, $2, $3, $4, $5, ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, TRUE)
-			ON CONFLICT (id) DO UPDATE SET
-				profession = EXCLUDED.profession,
-				experience_years = EXCLUDED.experience_years,
-				description = EXCLUDED.description,
-				location_name = EXCLUDED.location_name,
-				location_geom = EXCLUDED.location_geom,
-				is_active = TRUE,
-				updated_at = NOW()
-		`
-		if _, err := r.db.Exec(ctx, bikkerQuery, user.ID, profession, expYears, desc, locName, lon, lat); err != nil {
-			return nil, fmt.Errorf("failed to create bikker profile: %w", err)
+		if err := writeProviderIdentity(ctx, tx, created.ID, user.Bikker); err != nil {
+			return nil, err
 		}
+		created.Bikker = user.Bikker
 	}
-
-	return user, nil
+	if err := tx.Commit(ctx); err != nil {
+		return nil, identityDBError("identity: commit registration", err)
+	}
+	return created, nil
 }
 
-func (r *userRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
-	if r.db == nil {
-		return nil, fmt.Errorf("database connection pool is not initialized")
+func writeProviderIdentity(ctx context.Context, tx pgx.Tx, userID string, b *domain.Bikker) error {
+	if b == nil {
+		return domain.ErrInvalidInput
 	}
-	query := `
-		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), COALESCE(profile_photo_url, ''), rating, total_ratings, is_bikker, COALESCE(device_token, ''), created_at, updated_at
-		FROM users
-		WHERE email = $1 AND deleted_at IS NULL
-	`
-
-	user := &domain.User{}
-	err := r.db.QueryRow(ctx, query, email).Scan(
-		&user.ID,
-		&user.FullName,
-		&user.Email,
-		&user.Phone,
-		&user.CPF,
-		&user.ProfilePhotoURL,
-		&user.Rating,
-		&user.TotalRatings,
-		&user.IsBikker,
-		&user.DeviceToken,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-
+	_, err := tx.Exec(ctx, `INSERT INTO bikkers(id,profession,experience_years,description,location_name,location_geom,is_active)
+ VALUES($1,$2,$3,$4,$5,ST_SetSRID(ST_MakePoint($6,$7),4326)::geography,$8)
+ ON CONFLICT(id) DO UPDATE SET profession=EXCLUDED.profession,experience_years=EXCLUDED.experience_years,description=EXCLUDED.description,location_name=EXCLUDED.location_name,location_geom=EXCLUDED.location_geom,is_active=EXCLUDED.is_active,updated_at=NOW()`, userID, b.Profession, b.ExperienceYears, b.Description, b.LocationName, b.Longitude, b.Latitude, b.IsActive)
 	if err != nil {
-		return nil, fmt.Errorf("user not found or error: %w", err)
+		return identityDBError("identity: write provider", err)
 	}
-
-	return user, nil
+	return nil
 }
 
-func (r *userRepository) GetByPhone(ctx context.Context, phone string) (*domain.User, error) {
+func (r *userRepository) readUser(ctx context.Context, condition string, value string) (*domain.User, error) {
 	if r.db == nil {
-		return nil, fmt.Errorf("database connection pool is not initialized")
+		return nil, domain.ErrUnavailable
 	}
-	query := `
-		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), COALESCE(profile_photo_url, ''), rating, total_ratings, is_bikker, COALESCE(device_token, ''), created_at, updated_at
-		FROM users
-		WHERE (phone = $1 OR phone = RIGHT($1, 11) OR RIGHT(phone, 11) = RIGHT($1, 11) OR phone = RIGHT($1, 9))
-		  AND deleted_at IS NULL
-		LIMIT 1
-	`
-
-	user := &domain.User{}
-	err := r.db.QueryRow(ctx, query, phone).Scan(
-		&user.ID,
-		&user.FullName,
-		&user.Email,
-		&user.Phone,
-		&user.CPF,
-		&user.ProfilePhotoURL,
-		&user.Rating,
-		&user.TotalRatings,
-		&user.IsBikker,
-		&user.DeviceToken,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-
+	user, err := scanIdentity(r.db.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE `+condition+` AND deleted_at IS NULL`, value))
 	if err != nil {
-		return nil, fmt.Errorf("user not found by phone: %w", err)
+		return nil, err
 	}
-
-	r.populateBikkerIfNeeded(ctx, user)
-	return user, nil
-}
-
-func (r *userRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	if r.db == nil {
-		return nil, fmt.Errorf("database connection pool is not initialized")
-	}
-	query := `
-		SELECT id, full_name, email, COALESCE(phone, ''), COALESCE(cpf, ''), COALESCE(profile_photo_url, ''), rating, total_ratings, is_bikker, COALESCE(device_token, ''), created_at, updated_at
-		FROM users
-		WHERE id = $1 AND deleted_at IS NULL
-	`
-
-	user := &domain.User{}
-	err := r.db.QueryRow(ctx, query, id).Scan(
-		&user.ID,
-		&user.FullName,
-		&user.Email,
-		&user.Phone,
-		&user.CPF,
-		&user.ProfilePhotoURL,
-		&user.Rating,
-		&user.TotalRatings,
-		&user.IsBikker,
-		&user.DeviceToken,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
-
-	if err != nil {
-		return nil, fmt.Errorf("user not found or error: %w", err)
-	}
-
-	r.populateBikkerIfNeeded(ctx, user)
-	return user, nil
-}
-
-func (r *userRepository) populateBikkerIfNeeded(ctx context.Context, user *domain.User) {
-	if r.db == nil || user == nil || !user.IsBikker {
-		return
-	}
-	bikkerQuery := `
-		SELECT COALESCE(profession, ''), COALESCE(experience_years, ''), COALESCE(description, ''), COALESCE(location_name, 'São Paulo, SP'),
-		       COALESCE(ST_Y(location_geom::geometry), -23.5614), COALESCE(ST_X(location_geom::geometry), -46.6914), COALESCE(is_active, TRUE)
-		FROM bikkers
-		WHERE id = $1
-	`
-	b := &domain.Bikker{ID: user.ID}
-	if err := r.db.QueryRow(ctx, bikkerQuery, user.ID).Scan(
-		&b.Profession,
-		&b.ExperienceYears,
-		&b.Description,
-		&b.LocationName,
-		&b.Latitude,
-		&b.Longitude,
-		&b.IsActive,
-	); err == nil {
+	if user.IsBikker {
+		b := &domain.Bikker{ID: user.ID}
+		err := r.db.QueryRow(ctx, `SELECT profession,COALESCE(experience_years,''),COALESCE(description,''),COALESCE(location_name,''),COALESCE(ST_Y(location_geom::geometry),0),COALESCE(ST_X(location_geom::geometry),0),is_active FROM bikkers WHERE id=$1`, user.ID).Scan(&b.Profession, &b.ExperienceYears, &b.Description, &b.LocationName, &b.Latitude, &b.Longitude, &b.IsActive)
+		if err != nil {
+			return nil, identityDBError("identity: load provider", err)
+		}
 		user.Bikker = b
 	}
+	return user, nil
+}
+func (r *userRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
+	return r.readUser(ctx, "email=$1", email)
+}
+func (r *userRepository) GetByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	canonical, err := domain.NormalizePhone(phone)
+	if err != nil {
+		return nil, domain.ErrInvalidInput
+	}
+	return r.readUser(ctx, "phone=$1", canonical)
+}
+func (r *userRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	return r.readUser(ctx, "id=$1", id)
 }
 
-func (r *userRepository) UpdateUser(ctx context.Context, id string, name, email, phone string) error {
+func (r *userRepository) UpdateUser(ctx context.Context, id, name, email, phone string) error {
 	if r.db == nil {
-		return fmt.Errorf("database connection pool is not initialized")
+		return domain.ErrUnavailable
 	}
-	query := `
-		UPDATE users 
-		SET full_name = $1, email = $2, phone = NULLIF($3, ''), updated_at = NOW() 
-		WHERE id = $4 AND deleted_at IS NULL
-	`
-	tag, err := r.db.Exec(ctx, query, name, email, phone, id)
+	canonical, err := domain.NormalizePhone(phone)
 	if err != nil {
-		return fmt.Errorf("failed to update user: %w", err)
+		return domain.ErrInvalidInput
+	}
+	tag, err := r.db.Exec(ctx, `UPDATE users SET full_name=$1,email=$2,phone=$3,updated_at=NOW() WHERE id=$4 AND deleted_at IS NULL`, name, email, canonical, id)
+	if err != nil {
+		return identityDBError("identity: update user", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("user not found or already deleted")
+		return domain.ErrNotFound
 	}
 	return nil
 }
-
-func (r *userRepository) UpdateProfilePhoto(ctx context.Context, id string, photoURL string) error {
+func (r *userRepository) UpdateProfilePhoto(ctx context.Context, id, photoURL string) error {
 	if r.db == nil {
-		return fmt.Errorf("database connection pool is not initialized")
+		return domain.ErrUnavailable
 	}
-	query := `
-		UPDATE users
-		SET profile_photo_url = $1, updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
-	`
-	tag, err := r.db.Exec(ctx, query, photoURL, id)
+	tag, err := r.db.Exec(ctx, `UPDATE users SET profile_photo_url=$1,updated_at=NOW() WHERE id=$2 AND deleted_at IS NULL`, photoURL, id)
 	if err != nil {
-		return fmt.Errorf("failed to update profile photo: %w", err)
+		return identityDBError("identity: update photo", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("user not found or already deleted")
+		return domain.ErrNotFound
 	}
 	return nil
 }
-
 func (r *userRepository) DeleteUser(ctx context.Context, id string) error {
 	if r.db == nil {
-		return fmt.Errorf("database connection pool is not initialized")
+		return domain.ErrUnavailable
 	}
-	query := `
-		UPDATE users 
-		SET deleted_at = NOW() 
-		WHERE id = $1 AND deleted_at IS NULL
-	`
-	tag, err := r.db.Exec(ctx, query, id)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to soft delete user: %w", err)
+		return identityDBError("identity: begin deletion", err)
+	}
+	defer rollbackIdentity(ctx, tx)
+	tag, err := tx.Exec(ctx, `UPDATE users SET deleted_at=NOW(),device_token=NULL,notifications_enabled=FALSE,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, id)
+	if err != nil {
+		return identityDBError("identity: delete account", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("user not found or already deleted")
+		return domain.ErrNotFound
+	}
+	for _, statement := range []string{`UPDATE bikkers SET is_active=FALSE,updated_at=NOW() WHERE id=$1`, `UPDATE services SET is_active=FALSE,updated_at=NOW() WHERE bikker_id=$1`, `DELETE FROM user_devices WHERE user_id=$1`} {
+		if _, err := tx.Exec(ctx, statement, id); err != nil {
+			return identityDBError("identity: deactivate account dependencies", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return identityDBError("identity: commit account deletion", err)
 	}
 	return nil
 }
+func (r *userRepository) UpgradeToBikker(ctx context.Context, id string, b *domain.Bikker) (*domain.User, error) {
+	if r.db == nil {
+		return nil, domain.ErrUnavailable
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, identityDBError("identity: begin provider upgrade", err)
+	}
+	defer rollbackIdentity(ctx, tx)
+	user, err := scanIdentity(tx.QueryRow(ctx, `UPDATE users SET is_bikker=TRUE,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL RETURNING `+userColumns, id))
+	if err != nil {
+		return nil, err
+	}
+	if err := writeProviderIdentity(ctx, tx, id, b); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, identityDBError("identity: commit provider upgrade", err)
+	}
+	user.Bikker = b
+	return user, nil
+}
 
+// Compatibility entry points use the client application scope; runtime controllers
+// use UserDeviceRepository to keep installations of both apps independent.
 func (r *userRepository) UpdateDeviceToken(ctx context.Context, id string, token *string) error {
-	if r.db == nil {
-		return fmt.Errorf("database connection pool is not initialized")
+	if token == nil || *token == "" {
+		return r.DeleteDevice(ctx, id, "client", "")
 	}
-	var query string
-	var args []interface{}
-
-	if token != nil && *token != "" {
-		query = `
-			UPDATE users 
-			SET device_token = $1, updated_at = NOW() 
-			WHERE id = $2 AND deleted_at IS NULL
-		`
-		args = []interface{}{*token, id}
-	} else {
-		query = `
-			UPDATE users 
-			SET device_token = NULL, updated_at = NOW() 
-			WHERE id = $1 AND deleted_at IS NULL
-		`
-		args = []interface{}{id}
-	}
-
-	tag, err := r.db.Exec(ctx, query, args...)
+	return r.RegisterDevice(ctx, id, "client", *token)
+}
+func (r *userRepository) GetDeviceToken(ctx context.Context, id string) (string, error) {
+	tokens, err := r.GetDeviceTokens(ctx, id)
 	if err != nil {
-		return fmt.Errorf("failed to update device token: %w", err)
+		return "", err
+	}
+	if len(tokens) == 0 {
+		return "", nil
+	}
+	return tokens[0], nil
+}
+func (r *userRepository) RegisterDevice(ctx context.Context, id, appType, token string) error {
+	if r.db == nil {
+		return domain.ErrUnavailable
+	}
+	if (appType != "client" && appType != "provider") || token == "" || len(token) > 4096 {
+		return domain.ErrInvalidInput
+	}
+	tag, err := r.db.Exec(ctx, `INSERT INTO user_devices(user_id,app_type,token) SELECT id,$2,$3 FROM users WHERE id=$1 AND deleted_at IS NULL ON CONFLICT(token) DO UPDATE SET user_id=EXCLUDED.user_id,app_type=EXCLUDED.app_type,updated_at=NOW()`, id, appType, token)
+	if err != nil {
+		return identityDBError("identity: register device", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("user not found or already deleted")
+		return domain.ErrNotFound
 	}
 	return nil
 }
-
-func (r *userRepository) GetDeviceToken(ctx context.Context, id string) (string, error) {
+func (r *userRepository) DeleteDevice(ctx context.Context, id, appType, token string) error {
 	if r.db == nil {
-		return "", fmt.Errorf("database connection pool is not initialized")
+		return domain.ErrUnavailable
 	}
-	query := `
-		SELECT COALESCE(device_token, '')
-		FROM users
-		WHERE id = $1 AND deleted_at IS NULL
-	`
-	var token string
-	err := r.db.QueryRow(ctx, query, id).Scan(&token)
+	if appType != "client" && appType != "provider" {
+		return domain.ErrInvalidInput
+	}
+	_, err := r.db.Exec(ctx, `DELETE FROM user_devices WHERE user_id=$1 AND app_type=$2 AND ($3='' OR token=$3)`, id, appType, token)
 	if err != nil {
-		return "", fmt.Errorf("failed to get device token: %w", err)
+		return identityDBError("identity: unregister device", err)
 	}
-	return token, nil
+	return nil
 }
-
-func (r *userRepository) UpgradeToBikker(ctx context.Context, userID string, bikker *domain.Bikker) (*domain.User, error) {
+func (r *userRepository) GetDeviceTokens(ctx context.Context, id string) ([]string, error) {
 	if r.db == nil {
-		return nil, fmt.Errorf("database connection pool is not initialized")
+		return nil, domain.ErrUnavailable
 	}
-
-	updateUserQuery := `
-		UPDATE users 
-		SET is_bikker = TRUE, updated_at = NOW() 
-		WHERE id = $1 AND deleted_at IS NULL
-	`
-	tag, err := r.db.Exec(ctx, updateUserQuery, userID)
+	rows, err := r.db.Query(ctx, `SELECT d.token FROM user_devices d JOIN users u ON u.id=d.user_id WHERE d.user_id=$1 AND u.deleted_at IS NULL ORDER BY d.updated_at DESC`, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to upgrade user to bikker: %w", err)
+		return nil, identityDBError("identity: list devices", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, fmt.Errorf("user not found or already deleted")
+	defer rows.Close()
+	tokens := []string{}
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			return nil, identityDBError("identity: read device", err)
+		}
+		tokens = append(tokens, token)
 	}
-
-	profession := "Prestador de Serviços"
-	expYears := "1 ano"
-	desc := ""
-	locName := "São Paulo, SP"
-	lat := -23.55052
-	lon := -46.63330
-	if bikker != nil {
-		if bikker.Profession != "" {
-			profession = bikker.Profession
-		}
-		if bikker.ExperienceYears != "" {
-			expYears = bikker.ExperienceYears
-		}
-		desc = bikker.Description
-		if bikker.LocationName != "" {
-			locName = bikker.LocationName
-		}
-		if bikker.Latitude != 0 {
-			lat = bikker.Latitude
-		}
-		if bikker.Longitude != 0 {
-			lon = bikker.Longitude
-		}
+	if err := rows.Err(); err != nil {
+		return nil, identityDBError("identity: list devices", err)
 	}
-
-	bikkerQuery := `
-		INSERT INTO bikkers (id, profession, experience_years, description, location_name, location_geom, is_active)
-		VALUES ($1, $2, $3, $4, $5, ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, TRUE)
-		ON CONFLICT (id) DO UPDATE SET
-			profession = EXCLUDED.profession,
-			experience_years = EXCLUDED.experience_years,
-			description = EXCLUDED.description,
-			location_name = EXCLUDED.location_name,
-			location_geom = EXCLUDED.location_geom,
-			is_active = TRUE,
-			updated_at = NOW()
-	`
-	if _, err := r.db.Exec(ctx, bikkerQuery, userID, profession, expYears, desc, locName, lon, lat); err != nil {
-		return nil, fmt.Errorf("failed to create or update bikker profile: %w", err)
-	}
-
-	upgradedUser, err := r.GetByID(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch upgraded user: %w", err)
-	}
-	upgradedUser.Bikker = bikker
-	return upgradedUser, nil
+	return tokens, nil
 }

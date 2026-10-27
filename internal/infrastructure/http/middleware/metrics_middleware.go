@@ -109,7 +109,7 @@ func MetricsMiddleware() gin.HandlerFunc {
 
 		path := c.FullPath()
 		if path == "" {
-			path = c.Request.URL.Path
+			path = "unmatched"
 		}
 		status := strconv.Itoa(c.Writer.Status())
 		elapsedSeconds := time.Since(start).Seconds()

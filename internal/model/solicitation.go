@@ -1,5 +1,11 @@
 package model
 
+import (
+	"bikko-app/internal/domain"
+	"context"
+	"time"
+)
+
 type CounterOfferItem struct {
 	ID             string   `json:"id"`
 	Round          int      `json:"round"`
@@ -12,6 +18,11 @@ type CounterOfferItem struct {
 }
 
 type SolicitationItem struct {
+	RequestKey          string             `json:"-"`
+	CreatedAt           time.Time          `json:"created_at"`
+	Latitude            *float64           `json:"latitude,omitempty"`
+	Longitude           *float64           `json:"longitude,omitempty"`
+	DistanceKm          float64            `json:"distance_km"`
 	ID                  string             `json:"id"`
 	ClientID            string             `json:"client_id,omitempty"`
 	ClientName          string             `json:"client_name,omitempty"`
@@ -52,7 +63,7 @@ type SolicitationItem struct {
 	RenegotiationCount  int                `json:"renegotiation_count"`
 	CounterOffers       []CounterOfferItem `json:"counter_offers,omitempty"`
 	CounterOfferHistory []CounterOfferItem `json:"counter_offer_history,omitempty"`
-	NegotiationHistory []CounterOfferItem `json:"negotiation_history,omitempty"`
+	NegotiationHistory  []CounterOfferItem `json:"negotiation_history,omitempty"`
 	Photos              []string           `json:"photos"`
 	ClientPhotos        []string           `json:"client_photos,omitempty"`
 	CreatedDate         string             `json:"created_date"`
@@ -86,11 +97,23 @@ type CreateSolicitationRequest struct {
 	ClientPhotos    []string `json:"client_photos"`
 }
 
-type SolicitationStore interface {
-	GetInMemorySolicitationByID(id string) *SolicitationItem
-	SyncSolicitationInMemory(item SolicitationItem)
-	ApplyProviderProposalInMemory(id, providerID string, price float64, note string, accepted bool) *SolicitationItem
-	ApplyProviderCounterOfferInMemory(id, providerID string, counterPrice float64, reason string) *SolicitationItem
-	ApplyProviderRejectInMemory(id, providerID, reason string) *SolicitationItem
+// SolicitationStatusUpdateInput contains authenticated command metadata, not JSON identity fields.
+type SolicitationStatusUpdateInput struct {
+	ActorID             string
+	RequestKey          string
+	Status              string
+	TechnicalReport     *string
+	CancellationReason  *string
+	CounterOfferPrice   *float64
+	CounterOfferMessage *string
+	Photos              []string
 }
 
+type SolicitationRepository interface {
+	GetSolicitationsByUser(context.Context, string) ([]SolicitationItem, error)
+	GetSolicitationForUser(context.Context, string, string) (*SolicitationItem, error)
+	CreateSolicitation(context.Context, SolicitationItem) (*SolicitationItem, error)
+	UpdateSolicitationStatus(context.Context, string, SolicitationStatusUpdateInput) (*SolicitationItem, error)
+	GetProviderFeed(context.Context, string) ([]domain.OpportunityLead, error)
+	SubmitClientEvaluation(context.Context, string, string, domain.ClientEvaluationRequest) error
+}

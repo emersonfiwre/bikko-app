@@ -37,11 +37,13 @@ func (b *BootstrapController) GetBootstrap(c *gin.Context) {
 			"enable_profile_reviews":     false,
 			"enable_quote_counter_offer": true,
 			"enable_instant_chat":        false,
-			"enable_pix_direct_payment":  true,
+			"enable_pix_direct_payment":  false,
 			"enable_dark_mode_beta":      false,
 		}
 	}
 
+	// The current MVP does not provide a payment gateway, regardless of stale local Redis flags.
+	features["enable_pix_direct_payment"] = false
 	c.JSON(http.StatusOK, domain.BootstrapResponse{
 		Features:           features,
 		MinRequiredVersion: "1.0.0",

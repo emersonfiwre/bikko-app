@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"errors"
-	"os"
+	firebaseAuth "firebase.google.com/go/v4/auth"
 	"testing"
 
 	"bikko-app/internal/domain"
@@ -40,7 +40,7 @@ func (m *mockAuthUserRepo) GetByEmail(ctx context.Context, email string) (*domai
 			return u, nil
 		}
 	}
-	return nil, errors.New("user not found")
+	return nil, domain.ErrNotFound
 }
 
 func (m *mockAuthUserRepo) GetByPhone(ctx context.Context, phone string) (*domain.User, error) {
@@ -49,7 +49,7 @@ func (m *mockAuthUserRepo) GetByPhone(ctx context.Context, phone string) (*domai
 			return u, nil
 		}
 	}
-	return nil, errors.New("user not found")
+	return nil, domain.ErrNotFound
 }
 
 func (m *mockAuthUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
@@ -58,11 +58,21 @@ func (m *mockAuthUserRepo) GetByID(ctx context.Context, id string) (*domain.User
 			return u, nil
 		}
 	}
-	return nil, errors.New("user not found")
+	return nil, domain.ErrNotFound
 }
 
 func (m *mockAuthUserRepo) UpdateUser(ctx context.Context, id string, name, email, phone string) error {
-	return nil
+	for key, u := range m.users {
+		if u.ID == id {
+			delete(m.users, key)
+			u.FullName = name
+			u.Email = email
+			u.Phone = phone
+			m.users[phone] = u
+			return nil
+		}
+	}
+	return domain.ErrNotFound
 }
 
 func (m *mockAuthUserRepo) UpdateProfilePhoto(ctx context.Context, id string, photoURL string) error {
@@ -92,263 +102,119 @@ func (m *mockAuthUserRepo) UpgradeToBikker(ctx context.Context, userID string, b
 			return u, nil
 		}
 	}
-	return nil, errors.New("user not found")
+	return nil, domain.ErrNotFound
 }
 
-func TestAuthService_CheckPhone(t *testing.T) {
-	_ = os.Setenv("ENV", "development")
-	_ = os.Setenv("GIN_MODE", "debug")
-	jwtSvc := security.NewJWTService("secret")
-
-	t.Run("returns ErrInvalidCredentials when phone is empty", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		_, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{Phone: ""})
-		if !errors.Is(err, ErrInvalidCredentials) {
-			t.Fatalf("expected ErrInvalidCredentials, got %v", err)
-		}
-	})
-
-	t.Run("returns ErrUserNotFound for unregistered phone", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		_, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{
-			Phone:   "11911112222",
-			AppType: "client",
-		})
-		if !errors.Is(err, ErrUserNotFound) {
-			t.Fatalf("expected ErrUserNotFound, got %v", err)
-		}
-	})
-
-	t.Run("auto-seeds test client 11999990000 and allows login on client app", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		resp, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{
-			Phone:   "11999990000",
-			AppType: "client",
-		})
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if !resp.Exists || resp.IsBikker {
-			t.Fatalf("expected Exists=true and IsBikker=false, got %+v", resp)
-		}
-	})
-
-	t.Run("auto-seeds test client 11999990000 and blocks on bikker app with ErrClientNeedsBikkerRegistration", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		resp, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{
-			Phone:   "11999990000",
-			AppType: "bikker",
-		})
-		if !errors.Is(err, ErrClientNeedsBikkerRegistration) {
-			t.Fatalf("expected ErrClientNeedsBikkerRegistration, got %v", err)
-		}
-		if resp == nil || !resp.Exists || resp.IsBikker {
-			t.Fatalf("expected response with Exists=true and IsBikker=false, got %+v", resp)
-		}
-	})
-
-	t.Run("auto-seeds test bikker 11988880000 and allows on both bikker and client apps", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		// Bikker app check
-		respBikker, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{
-			Phone:   "11988880000",
-			AppType: "bikker",
-		})
-		if err != nil {
-			t.Fatalf("expected no error on bikker app, got %v", err)
-		}
-		if !respBikker.Exists || !respBikker.IsBikker {
-			t.Fatalf("expected Exists=true and IsBikker=true, got %+v", respBikker)
-		}
-
-		// Client app check
-		respClient, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{
-			Phone:   "11988880000",
-			AppType: "client",
-		})
-		if err != nil {
-			t.Fatalf("expected no error on client app, got %v", err)
-		}
-		if !respClient.Exists || !respClient.IsBikker {
-			t.Fatalf("expected Exists=true and IsBikker=true, got %+v", respClient)
-		}
-	})
+type verifiedPhoneToken struct {
+	phone   string
+	noPhone bool
 }
 
-func TestAuthService_Login(t *testing.T) {
-	_ = os.Setenv("ENV", "development")
-	_ = os.Setenv("GIN_MODE", "debug")
-	jwtSvc := security.NewJWTService("secret")
-
-	t.Run("client user is blocked when logging into bikker app", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		repo.users["11999990000"] = &domain.User{
-			ID:       "client-1",
-			FullName: "Cliente Teste",
-			Phone:    "11999990000",
-			IsBikker: false,
-		}
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		_, err := svc.Login(context.Background(), model.LoginRequest{
-			IDToken: "test_token",
-			Phone:   "11999990000",
-			AppType: "bikker",
-		})
-		if !errors.Is(err, ErrClientNeedsBikkerRegistration) {
-			t.Fatalf("expected ErrClientNeedsBikkerRegistration, got %v", err)
-		}
-	})
-
-	t.Run("client user can log into client app", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		repo.users["11999990000"] = &domain.User{
-			ID:       "client-1",
-			FullName: "Cliente Teste",
-			Phone:    "11999990000",
-			IsBikker: false,
-		}
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		resp, err := svc.Login(context.Background(), model.LoginRequest{
-			IDToken: "test_token",
-			Phone:   "11999990000",
-			AppType: "client",
-		})
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if resp.Token == "" || resp.User.ID != "client-1" {
-			t.Fatalf("unexpected login response: %+v", resp)
-		}
-	})
-
-	t.Run("bikker user can log into both bikker and client apps", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		repo.users["11988880000"] = &domain.User{
-			ID:       "bikker-1",
-			FullName: "Bikker Profissional",
-			Phone:    "11988880000",
-			IsBikker: true,
-		}
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		respBikker, err := svc.Login(context.Background(), model.LoginRequest{
-			IDToken: "test_token",
-			Phone:   "11988880000",
-			AppType: "bikker",
-		})
-		if err != nil {
-			t.Fatalf("expected bikker login to succeed, got %v", err)
-		}
-		if respBikker.Token == "" || !respBikker.User.IsBikker {
-			t.Fatalf("unexpected bikker response: %+v", respBikker)
-		}
-
-		respClient, err := svc.Login(context.Background(), model.LoginRequest{
-			IDToken: "test_token",
-			Phone:   "11988880000",
-			AppType: "client",
-		})
-		if err != nil {
-			t.Fatalf("expected client login to succeed for bikker, got %v", err)
-		}
-		if respClient.Token == "" {
-			t.Fatalf("unexpected client response: %+v", respClient)
-		}
-	})
+func (v verifiedPhoneToken) VerifyIDToken(context.Context, string) (*firebaseAuth.Token, error) {
+	claims := map[string]interface{}{}
+	if !v.noPhone {
+		claims["phone_number"] = v.phone
+	}
+	return &firebaseAuth.Token{UID: "verified-firebase-user", Claims: claims}, nil
 }
-
-func TestAuthService_RegisterUpgradeToBikker(t *testing.T) {
-	jwtSvc := security.NewJWTService("secret")
-
-	t.Run("upgrades existing client to bikker when is_bikker=true", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		repo.users["11999990000"] = &domain.User{
-			ID:       "client-to-upgrade",
-			FullName: "Cliente Existente",
-			Phone:    "11999990000",
-			Email:    "cliente@bikko.com",
-			IsBikker: false,
-		}
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		lat := -23.55
-		lon := -46.63
-		resp, err := svc.Register(context.Background(), model.RegisterRequest{
-			FullName:        "Cliente Existente",
-			Phone:           "11999990000",
-			IsBikker:        true,
-			Profession:      "Encanador Residencial",
-			ExperienceYears: "3 a 5 anos",
-			Description:     "Especialista em vazamentos e encanamento predial.",
-			LocationName:    "São Paulo, SP",
-			Latitude:        &lat,
-			Longitude:       &lon,
+func testRegistration() model.RegisterRequest {
+	lat, lon := -23.5614, -46.6914
+	return model.RegisterRequest{FullName: "Verified", Email: "verified@example.com", Phone: "11999990000", IDToken: "firebase-valid", IsBikker: true, Profession: "Eletricista", Latitude: &lat, Longitude: &lon}
+}
+func TestRegistrationRequiresVerifiedPhoneBeforeUpgrade(t *testing.T) {
+	t.Setenv("ENV", "production")
+	repo := newMockAuthUserRepo()
+	repo.users["11999990000"] = &domain.User{ID: "victim", Phone: "11999990000"}
+	svc := NewAuthService(repo, security.NewJWTService("test-secret"), nil)
+	req := testRegistration()
+	req.IDToken = ""
+	if _, err := svc.Register(context.Background(), req); !errors.Is(err, ErrInvalidFirebaseToken) {
+		t.Fatalf("expected proof required: %v", err)
+	}
+	if repo.users[req.Phone].IsBikker {
+		t.Fatal("unverified caller changed victim account")
+	}
+}
+func TestRegistrationRejectsMissingOrMismatchingPhoneClaims(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		verifier verifiedPhoneToken
+	}{{"missing claim", verifiedPhoneToken{noPhone: true}}, {"other phone", verifiedPhoneToken{phone: "+5511988880000"}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockAuthUserRepo()
+			svc := NewAuthService(repo, security.NewJWTService("test-secret"), tc.verifier)
+			if _, err := svc.Register(context.Background(), testRegistration()); err == nil {
+				t.Fatal("registration accepted an unrelated Firebase identity")
+			}
+			if len(repo.users) != 0 {
+				t.Fatal("invalid identity mutated repository")
+			}
 		})
-		if err != nil {
-			t.Fatalf("expected registration/upgrade to succeed, got %v", err)
-		}
-
-		if resp.Message != "Cadastro de Bikker vinculado com sucesso" {
-			t.Errorf("unexpected message: %s", resp.Message)
-		}
-		if !resp.User.IsBikker {
-			t.Errorf("expected User.IsBikker to be true")
-		}
-		if repo.users["11999990000"].IsBikker != true {
-			t.Errorf("expected repo user to be upgraded to bikker")
-		}
-	})
-
-	t.Run("returns ErrUserAlreadyExists when existing client registers again as client", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		repo.users["11999990000"] = &domain.User{
-			ID:       "client-1",
-			FullName: "Cliente Existente",
-			Phone:    "11999990000",
-			IsBikker: false,
-		}
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		_, err := svc.Register(context.Background(), model.RegisterRequest{
-			FullName: "Cliente Existente",
-			Phone:    "11999990000",
-			IsBikker: false,
+	}
+}
+func TestVerifiedUpgradeReturnsExistingIdentity(t *testing.T) {
+	repo := newMockAuthUserRepo()
+	repo.users["11999990000"] = &domain.User{ID: "existing", Phone: "11999990000"}
+	jwt := security.NewJWTService("test-secret")
+	svc := NewAuthService(repo, jwt, verifiedPhoneToken{phone: "+5511999990000"})
+	response, err := svc.Register(context.Background(), testRegistration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := jwt.ValidateToken(response.Token)
+	if err != nil || id != "existing" || !response.User.IsBikker {
+		t.Fatal(response, err)
+	}
+}
+func TestLocalAccountsAreExplicitAndBoundToOnlyTheirOwnPhones(t *testing.T) {
+	for _, env := range []string{"", "production", "development"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("ENV", env)
+			t.Setenv("GIN_MODE", "debug")
+			repo := newMockAuthUserRepo()
+			repo.users["11999990000"] = &domain.User{ID: "lucas", Phone: "11999990000"}
+			repo.users["11988880000"] = &domain.User{ID: "rafael", Phone: "11988880000", IsBikker: true}
+			svc := NewAuthService(repo, security.NewJWTService("test-secret"), nil, WithLocalTestAccounts(true))
+			response, err := svc.Login(context.Background(), model.LoginRequest{IDToken: "local_test_11999990000", Phone: "11999990000"})
+			if env == "development" {
+				if err != nil || response.User.ID != "lucas" {
+					t.Fatal(response, err)
+				}
+			} else if err == nil {
+				t.Fatal("test identity enabled outside explicit development")
+			}
+			for _, token := range []string{"mock_token_123", "test_token", "local_test_11987654321", "local_test_11988880000"} {
+				if _, err := svc.Login(context.Background(), model.LoginRequest{IDToken: token, Phone: "11999990000"}); err == nil {
+					t.Fatalf("accepted %s for Lucas", token)
+				}
+			}
 		})
-		if !errors.Is(err, ErrUserAlreadyExists) {
-			t.Fatalf("expected ErrUserAlreadyExists, got %v", err)
-		}
-	})
-
-	t.Run("returns ErrUserAlreadyExists when existing bikker registers again", func(t *testing.T) {
-		repo := newMockAuthUserRepo()
-		repo.users["11988880000"] = &domain.User{
-			ID:       "bikker-1",
-			FullName: "Bikker Existente",
-			Phone:    "11988880000",
-			IsBikker: true,
-		}
-		svc := NewAuthService(repo, jwtSvc, nil)
-
-		_, err := svc.Register(context.Background(), model.RegisterRequest{
-			FullName:   "Bikker Existente",
-			Phone:      "11988880000",
-			IsBikker:   true,
-			Profession: "Eletricista",
-		})
-		if !errors.Is(err, ErrUserAlreadyExists) {
-			t.Fatalf("expected ErrUserAlreadyExists, got %v", err)
-		}
-	})
+	}
+	t.Setenv("ENV", "development")
+	svc := NewAuthService(newMockAuthUserRepo(), security.NewJWTService("test-secret"), nil)
+	if _, err := svc.VerifyIDToken(context.Background(), "local_test_11999990000"); err == nil {
+		t.Fatal("local identity enabled without option")
+	}
+}
+func TestCheckPhoneDoesNotSeedOrHideDatabaseFailure(t *testing.T) {
+	repo := newMockAuthUserRepo()
+	svc := NewAuthService(repo, security.NewJWTService("test-secret"), nil)
+	if _, err := svc.CheckPhone(context.Background(), model.CheckPhoneRequest{Phone: "11999990000"}); !errors.Is(err, ErrUserNotFound) {
+		t.Fatal(err)
+	}
+	if len(repo.users) != 0 {
+		t.Fatal("phone discovery must be read-only")
+	}
+}
+func TestLoginUsesCanonicalVerifiedPhone(t *testing.T) {
+	repo := newMockAuthUserRepo()
+	repo.users["11999990000"] = &domain.User{ID: "lucas", Phone: "11999990000"}
+	svc := NewAuthService(repo, security.NewJWTService("test-secret"), verifiedPhoneToken{phone: "+55 (11) 99999-0000"})
+	result, err := svc.Login(context.Background(), model.LoginRequest{IDToken: "valid", Phone: "(11) 99999-0000"})
+	if err != nil || result.User.ID != "lucas" {
+		t.Fatal(result, err)
+	}
+	if _, err := svc.Login(context.Background(), model.LoginRequest{IDToken: "valid", AppType: "bikker"}); !errors.Is(err, ErrClientNeedsBikkerRegistration) {
+		t.Fatal(err)
+	}
 }

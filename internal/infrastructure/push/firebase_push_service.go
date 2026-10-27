@@ -37,12 +37,22 @@ func (s *FirebasePushService) SendNotification(ctx context.Context, userID strin
 		return fmt.Errorf("user repository is required")
 	}
 
-	token, err := s.userRepo.GetDeviceToken(ctx, userID)
+	tokens := []string{}
+	var err error
+	if devices, ok := s.userRepo.(domain.UserDeviceRepository); ok {
+		tokens, err = devices.GetDeviceTokens(ctx, userID)
+	} else {
+		var token string
+		token, err = s.userRepo.GetDeviceToken(ctx, userID)
+		if token != "" {
+			tokens = append(tokens, token)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("failed to retrieve device token for user %s: %w", userID, err)
 	}
 
-	if token == "" {
+	if len(tokens) == 0 {
 		slog.Info("user has no registered device token, skipping push", slog.String("user_id", userID))
 		return nil
 	}
@@ -50,8 +60,7 @@ func (s *FirebasePushService) SendNotification(ctx context.Context, userID strin
 	var sender messagingSender = s.sender
 	if sender == nil {
 		if s.app == nil {
-			slog.Warn("firebase app not initialized, skipping push", slog.String("user_id", userID), slog.String("token", token))
-			return nil
+			return fmt.Errorf("firebase messaging unavailable")
 		}
 		client, err := s.app.Messaging(ctx)
 		if err != nil {
@@ -60,20 +69,22 @@ func (s *FirebasePushService) SendNotification(ctx context.Context, userID strin
 		sender = client
 	}
 
-	msg := &messaging.Message{
-		Token: token,
-		Notification: &messaging.Notification{
-			Title: title,
-			Body:  body,
-		},
-		Data: data,
+	for _, token := range tokens {
+		msg := &messaging.Message{Token: token, Notification: &messaging.Notification{Title: title, Body: body}, Data: data}
+		if _, err := sender.Send(ctx, msg); err != nil {
+			if messaging.IsRegistrationTokenNotRegistered(err) {
+				if devices, ok := s.userRepo.(domain.UserDeviceRepository); ok {
+					for _, app := range []string{"client", "provider"} {
+						if cleanupErr := devices.DeleteDevice(ctx, userID, app, token); cleanupErr != nil {
+							return fmt.Errorf("remove expired device: %w", cleanupErr)
+						}
+					}
+					continue
+				}
+			}
+			return fmt.Errorf("FCM delivery failed for user %s", userID)
+		}
 	}
-
-	resp, err := sender.Send(ctx, msg)
-	if err != nil {
-		return fmt.Errorf("failed to send FCM notification to user %s: %w", userID, err)
-	}
-
-	slog.Info("successfully sent FCM message", slog.String("fcm_id", resp), slog.String("user_id", userID))
+	slog.Info("sent FCM messages", slog.String("user_id", userID), slog.Int("devices", len(tokens)))
 	return nil
 }

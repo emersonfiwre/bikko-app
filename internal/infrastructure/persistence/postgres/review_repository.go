@@ -1,185 +1,83 @@
 package postgres
 
 import (
-	"context"
-	"fmt"
-	"time"
-
 	"bikko-app/internal/domain"
-
+	"context"
+	"errors"
+	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type reviewRepository struct {
-	pool *pgxpool.Pool
-}
+type reviewRepository struct{ pool *pgxpool.Pool }
 
 func NewReviewRepository(pool *pgxpool.Pool) domain.ReviewRepository {
 	return &reviewRepository{pool: pool}
 }
-
 func (r *reviewRepository) CreateReviewInTx(ctx context.Context, review *domain.Review) error {
+	if r.pool == nil {
+		return domain.ErrUnavailable
+	}
+	if review == nil || !isValidUUID(review.OrderID) || !isValidUUID(review.ReviewerID) || review.Rating < 1 || review.Rating > 5 || len([]rune(review.Comment)) > 1000 {
+		return domain.ErrInvalidInput
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("falha ao iniciar transação: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	orderID := review.OrderID
-	switch orderID {
-	case "sol_1":
-		orderID = "44444444-0000-0000-0000-000000000001"
-	case "sol_2":
-		orderID = "44444444-0000-0000-0000-000000000002"
-	case "sol_3":
-		orderID = "44444444-0000-0000-0000-000000000003"
-	case "sol_4":
-		orderID = "44444444-0000-0000-0000-000000000004"
-	}
-
-	// 1. Verify Order / Solicitation and fetch service_id and bikker_id
-	var actualOrderID string
-	var quoteRequestID string
-	var orderStatus string
-	var serviceID *string
-	var bikkerID string
-
-	orderQuery := `SELECT id::text, quote_request_id::text, status, service_id::text, bikker_id::text FROM orders WHERE id::text = $1 OR quote_request_id::text = $1 LIMIT 1`
-	err = tx.QueryRow(ctx, orderQuery, orderID).Scan(&actualOrderID, &quoteRequestID, &orderStatus, &serviceID, &bikkerID)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			// Fallback: check if quote_request exists
-			qrQuery := `SELECT id::text, customer_id::text, bikker_id::text, service_id::text, status FROM quote_requests WHERE id::text = $1 LIMIT 1`
-			var qrID, qrCustID, qrBikkerID, qrStatus string
-			var qrServiceID *string
-			if qrErr := tx.QueryRow(ctx, qrQuery, orderID).Scan(&qrID, &qrCustID, &qrBikkerID, &qrServiceID, &qrStatus); qrErr != nil {
-				return domain.ErrNotFound
-			}
-			if qrStatus == "REJECTED" || qrStatus == "EXPIRED" {
-				return domain.ErrOrderNotCompleted
-			}
-			quoteRequestID = qrID
-			bikkerID = qrBikkerID
-			serviceID = qrServiceID
-
-			insOrderQuery := `
-				INSERT INTO orders (quote_request_id, customer_id, bikker_id, service_id, status, final_price, scheduled_date)
-				VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'COMPLETED', 0, NOW())
-				RETURNING id::text
-			`
-			if insErr := tx.QueryRow(ctx, insOrderQuery, qrID, qrCustID, qrBikkerID, qrServiceID).Scan(&actualOrderID); insErr != nil {
-				return fmt.Errorf("erro ao criar ordem para avaliacao: %w", insErr)
-			}
-			orderStatus = string(domain.OrderStatusCompleted)
-		} else {
-			return fmt.Errorf("erro ao verificar ordem: %w", err)
-		}
-	}
-
-	if orderStatus == string(domain.OrderStatusCancelled) {
-		return domain.ErrOrderNotCompleted
-	}
-
-	// Guardrail: Check if already reviewed in database
-	var alreadyEvaluated bool
-	if quoteRequestID != "" {
-		_ = tx.QueryRow(ctx, `SELECT COALESCE(client_evaluated, FALSE) FROM quote_requests WHERE id::text = $1`, quoteRequestID).Scan(&alreadyEvaluated)
-	}
-	if alreadyEvaluated {
-		return domain.ErrAlreadyReviewed
-	}
-
-	var exists bool
-	checkReviewQuery := `SELECT EXISTS(SELECT 1 FROM reviews WHERE (order_id::text = $1 OR order_id::text = $3) AND reviewer_id::text = $2)`
-	if err := tx.QueryRow(ctx, checkReviewQuery, actualOrderID, review.ReviewerID, quoteRequestID).Scan(&exists); err != nil {
 		return err
 	}
-	if exists {
+	defer tx.Rollback(ctx)
+	q, err := lockContract(ctx, tx, review.OrderID, review.ReviewerID)
+	if err != nil {
+		return err
+	}
+	if q.client != review.ReviewerID || q.provider == review.ReviewerID {
+		return domain.ErrForbidden
+	}
+	if q.orderStatus == nil || *q.orderStatus != "COMPLETED" {
+		return domain.ErrOrderNotCompleted
+	}
+	var orderID string
+	if err = tx.QueryRow(ctx, `SELECT id::text FROM orders WHERE quote_request_id=$1::uuid`, q.id).Scan(&orderID); err != nil {
+		return err
+	}
+	// Serialize reputation changes across orders for the same professional.
+	var userID string
+	if err = tx.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1::uuid FOR UPDATE`, q.provider).Scan(&userID); err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO reviews(order_id,service_id,reviewer_id,bikker_id,rating,comment) VALUES($1::uuid,$2,$3::uuid,$4::uuid,$5,$6) ON CONFLICT(order_id,reviewer_id) DO NOTHING RETURNING id::text,created_at`, orderID, q.service, q.client, q.provider, review.Rating, review.Comment).Scan(&review.ID, &review.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrAlreadyReviewed
 	}
-
-	// If order is not yet marked COMPLETED, complete it now!
-	if orderStatus != string(domain.OrderStatusCompleted) {
-		_, _ = tx.Exec(ctx, `UPDATE orders SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP WHERE id::text = $1`, actualOrderID)
-		orderStatus = string(domain.OrderStatusCompleted)
-	}
-
-	// Update quote_requests to ACCEPTED (completed), client_evaluated = TRUE, client_rating_given
-	if quoteRequestID != "" {
-		_, _ = tx.Exec(ctx, `
-			UPDATE quote_requests
-			SET status = 'ACCEPTED', client_evaluated = TRUE, client_rating_given = $2, updated_at = CURRENT_TIMESTAMP
-			WHERE id::text = $1
-		`, quoteRequestID, review.Rating)
-	}
-
-	review.OrderID = actualOrderID
-	if serviceID != nil {
-		review.ServiceID = *serviceID
-	}
-	review.BikkerID = bikkerID
-
-	// 2. Insert Review
-	var insertedID string
-	var insertedCreatedAt time.Time
-	insertReviewQuery := `
-		INSERT INTO reviews (order_id, service_id, reviewer_id, bikker_id, rating, comment)
-		VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5, $6)
-		RETURNING id, created_at
-	`
-	err = tx.QueryRow(ctx, insertReviewQuery,
-		review.OrderID, serviceID, review.ReviewerID, review.BikkerID, review.Rating, review.Comment,
-	).Scan(&insertedID, &insertedCreatedAt)
 	if err != nil {
-		return fmt.Errorf("erro ao inserir avaliação: %w", err)
+		return fmt.Errorf("insert review: %w", err)
 	}
-	review.ID = insertedID
-	review.CreatedAt = insertedCreatedAt
-
-	// 3. Update SERVICES rating & count incrementally if serviceID is present
-	if serviceID != nil && *serviceID != "" {
-		var currentAvg float64
-		var currentTotal int
-		getServiceQuery := `SELECT reviews_average, total_reviews FROM services WHERE id::text = $1 FOR UPDATE`
-		if err := tx.QueryRow(ctx, getServiceQuery, *serviceID).Scan(&currentAvg, &currentTotal); err == nil {
-			newTotalService := currentTotal + 1
-			newAvgService := ((currentAvg * float64(currentTotal)) + float64(review.Rating)) / float64(newTotalService)
-
-			updateServiceQuery := `
-				UPDATE services 
-				SET reviews_average = $1, total_reviews = $2, updated_at = CURRENT_TIMESTAMP
-				WHERE id::text = $3
-			`
-			_, _ = tx.Exec(ctx, updateServiceQuery, newAvgService, newTotalService, *serviceID)
+	review.OrderID = orderID
+	review.BikkerID = q.provider
+	if q.service != nil {
+		review.ServiceID = *q.service
+		_, err = tx.Exec(ctx, `UPDATE services SET reviews_average=(SELECT ROUND(AVG(rating)::numeric,2) FROM reviews WHERE service_id=$1::uuid),total_reviews=(SELECT COUNT(*) FROM reviews WHERE service_id=$1::uuid),updated_at=NOW() WHERE id=$1::uuid`, *q.service)
+		if err != nil {
+			return err
 		}
 	}
-
-	// 4. Update BIKKERS rating & count
-	updateBikkerQuery := `
-		UPDATE bikkers
-		SET rating = ROUND(((COALESCE(rating, 0) * COALESCE(total_reviews, 0) + $1) / (COALESCE(total_reviews, 0) + 1))::numeric, 2),
-		    total_reviews = COALESCE(total_reviews, 0) + 1,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id::text = $2
-	`
-	if _, err := tx.Exec(ctx, updateBikkerQuery, float64(review.Rating), bikkerID); err != nil {
-		return fmt.Errorf("erro ao atualizar bikker: %w", err)
+	_, err = tx.Exec(ctx, `UPDATE bikkers SET rating=(SELECT ROUND(AVG(rating)::numeric,2) FROM reviews WHERE bikker_id=$1::uuid),total_reviews=(SELECT COUNT(*) FROM reviews WHERE bikker_id=$1::uuid),updated_at=NOW() WHERE id=$1::uuid`, q.provider)
+	if err != nil {
+		return err
 	}
-
-	// 5. Update USERS rating & total_ratings for the reviewed Bikker
-	updateUserQuery := `
-		UPDATE users
-		SET rating = ROUND(((COALESCE(rating, 0) * COALESCE(total_ratings, 0) + $1) / (COALESCE(total_ratings, 0) + 1))::numeric, 2),
-		    total_ratings = COALESCE(total_ratings, 0) + 1,
-		    updated_at = CURRENT_TIMESTAMP
-		WHERE id::text = $2
-	`
-	_, _ = tx.Exec(ctx, updateUserQuery, float64(review.Rating), bikkerID)
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("erro ao comitar transação de avaliação: %w", err)
+	if err = recomputeUserRating(ctx, tx, q.provider); err != nil {
+		return err
 	}
-
-	return nil
+	_, err = tx.Exec(ctx, `UPDATE quote_requests SET client_evaluated=TRUE,client_rating_given=$2,updated_at=NOW() WHERE id=$1::uuid`, q.id, review.Rating)
+	if err != nil {
+		return err
+	}
+	if err = enqueueContractNotification(ctx, tx, q.provider, q.id, "Nova avaliação", "O cliente avaliou o serviço.", "review_received"); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+func recomputeUserRating(ctx context.Context, tx pgx.Tx, userID string) error {
+	_, err := tx.Exec(ctx, `UPDATE users SET rating=COALESCE((SELECT ROUND(AVG(rating)::numeric,2) FROM (SELECT rating FROM reviews WHERE bikker_id=$1::uuid UNION ALL SELECT rating FROM client_reviews WHERE client_id=$1::uuid) all_reviews),0),total_ratings=(SELECT COUNT(*) FROM (SELECT id FROM reviews WHERE bikker_id=$1::uuid UNION ALL SELECT id FROM client_reviews WHERE client_id=$1::uuid) all_reviews),updated_at=NOW() WHERE id=$1::uuid`, userID)
+	return err
 }

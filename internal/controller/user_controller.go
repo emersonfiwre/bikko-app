@@ -1,7 +1,10 @@
 package controller
 
 import (
+	"errors"
+	"io"
 	"net/http"
+	"strings"
 
 	"bikko-app/internal/domain"
 	"bikko-app/internal/infrastructure/http/middleware"
@@ -34,8 +37,22 @@ func (u *UserController) SaveDeviceToken(c *gin.Context) {
 		return
 	}
 
-	if err := u.userRepo.UpdateDeviceToken(c.Request.Context(), userID, &req.Token); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save device token: " + err.Error()})
+	var err error
+	if devices, ok := u.userRepo.(domain.UserDeviceRepository); ok {
+		appType := strings.ToLower(c.GetHeader("X-App-Type"))
+		if appType == "" {
+			appType = "client"
+		}
+		if appType != "client" && appType != "provider" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid application type"})
+			return
+		}
+		err = devices.RegisterDevice(c.Request.Context(), userID, appType, req.Token)
+	} else {
+		err = u.userRepo.UpdateDeviceToken(c.Request.Context(), userID, &req.Token)
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save device token"})
 		return
 	}
 
@@ -52,8 +69,31 @@ func (u *UserController) DeleteDeviceToken(c *gin.Context) {
 		return
 	}
 
-	if err := u.userRepo.UpdateDeviceToken(c.Request.Context(), userID, nil); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete device token: " + err.Error()})
+	var err error
+	if devices, ok := u.userRepo.(domain.UserDeviceRepository); ok {
+		appType := strings.ToLower(c.GetHeader("X-App-Type"))
+		if appType == "" {
+			appType = "client"
+		}
+		if appType != "client" && appType != "provider" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid application type"})
+			return
+		}
+		var req struct {
+			Token string `json:"token"`
+		}
+		if c.Request.ContentLength != 0 {
+			if bindErr := c.ShouldBindJSON(&req); bindErr != nil && !errors.Is(bindErr, io.EOF) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token payload"})
+				return
+			}
+		}
+		err = devices.DeleteDevice(c.Request.Context(), userID, appType, req.Token)
+	} else {
+		err = u.userRepo.UpdateDeviceToken(c.Request.Context(), userID, nil)
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete device token"})
 		return
 	}
 

@@ -8,41 +8,34 @@ import (
 	"bikko-app/internal/model"
 )
 
-type SolicitationProvider interface {
-	GetActiveSolicitations() []model.SolicitationItem
-}
-
 type UserSolicitationsProvider interface {
 	GetSolicitationsByUser(ctx context.Context, userID string) ([]model.SolicitationItem, error)
 }
 
 type ProfileRepository interface {
 	GetProfileByID(ctx context.Context, id string) (*model.ProfileResponse, error)
-	DeleteAccount(ctx context.Context, id string) error
 }
 
-type mockProfileRepository struct {
-	solicitationProvider SolicitationProvider
+type profileRepository struct {
+	solicitationProvider UserSolicitationsProvider
 }
 
-func NewMockProfileRepository(sp SolicitationProvider) ProfileRepository {
-	return &mockProfileRepository{
-		solicitationProvider: sp,
-	}
+func NewProfileRepository(sp UserSolicitationsProvider) ProfileRepository {
+	return &profileRepository{solicitationProvider: sp}
 }
 
-func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (*model.ProfileResponse, error) {
-	orders := make([]model.ProfileOrderItem, 0)
-	var solicitations []model.SolicitationItem
-
-	if up, ok := r.solicitationProvider.(UserSolicitationsProvider); ok && id != "" {
-		if items, err := up.GetSolicitationsByUser(ctx, id); err == nil && len(items) > 0 {
-			solicitations = items
-		}
+func (r *profileRepository) GetProfileByID(ctx context.Context, id string) (*model.ProfileResponse, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, fmt.Errorf("user id required")
 	}
-	if len(solicitations) == 0 && r.solicitationProvider != nil {
-		solicitations = r.solicitationProvider.GetActiveSolicitations()
+	if r.solicitationProvider == nil {
+		return nil, fmt.Errorf("profile orders repository unavailable")
 	}
+	solicitations, err := r.solicitationProvider.GetSolicitationsByUser(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("profile: load user orders: %w", err)
+	}
+	orders := make([]model.ProfileOrderItem, 0, len(solicitations))
 
 	for _, s := range solicitations {
 		var statusText string
@@ -95,7 +88,7 @@ func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (
 		}
 
 		orderServiceName := strings.TrimSpace(s.ServiceName)
-		if orderServiceName == "" || orderServiceName == "Solicitação de Serviço" || orderServiceName == s.ProviderName || strings.Contains(strings.ToLower(orderServiceName), "rafael") {
+		if orderServiceName == "" || orderServiceName == "Solicitação de Serviço" || orderServiceName == s.ProviderName {
 			if catName != "" && catName != "Serviço" && catName != "Geral" {
 				orderServiceName = catName
 			}
@@ -110,37 +103,15 @@ func (r *mockProfileRepository) GetProfileByID(ctx context.Context, id string) (
 			Distance:       statusText,
 			Status:         s.Status,
 			ReviewsAverage: s.ProviderRating,
-			TotalReviews:   1,
+			TotalReviews:   0,
 			BikkerID:       bikkerID,
 			Category: &model.ProfileOrderCategory{
-				ID:      "cat_" + s.ID,
+				ID:      "",
 				Name:    catName,
 				IconURL: s.ProviderPhotoURL,
 			},
 		})
 	}
 
-	isActive := true
-	return &model.ProfileResponse{
-		ID:              id,
-		ImageProfile:    "https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg",
-		Name:            "Emerson Torres",
-		Email:           "emerson@bikko.com.br",
-		Phone:           "(11) 99999-9999",
-		Rating:          "4.9",
-		TotalRatings:    18,
-		Profession:      "Encanador & Eletricista Especializado",
-		ExperienceYears: "Mais de 5 anos",
-		Description:     "Profissional verificado com mais de 8 anos de atuação em instalações e manutenções residenciais na Grande São Paulo.",
-		LocationName:    "Pinheiros, São Paulo - SP",
-		Latitude:        -23.5615,
-		Longitude:       -46.6960,
-		IsActive:        &isActive,
-		Orders:          orders,
-	}, nil
-}
-
-func (r *mockProfileRepository) DeleteAccount(ctx context.Context, id string) error {
-	// Soft delete logically marks account as deactivated
-	return nil
+	return &model.ProfileResponse{ID: id, Orders: orders}, nil
 }

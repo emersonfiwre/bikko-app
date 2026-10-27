@@ -3,8 +3,8 @@ package controller
 import (
 	"errors"
 	"net/http"
-	"os"
 
+	"bikko-app/internal/domain"
 	"bikko-app/internal/infrastructure/http/middleware"
 	"bikko-app/internal/service"
 
@@ -22,13 +22,6 @@ func NewProfileController(profileService service.ProfileService) *ProfileControl
 func (p *ProfileController) GetProfile(c *gin.Context) {
 	// Instead of query param, use the authenticated user ID injected by middleware
 	userID := middleware.GetUserID(c)
-	// [SECURITY AUDIT] ATENÇÃO: O fallback para c.Query("userId") é mantido exclusivamente
-	// para facilitar testes unitários. Em ambiente de Release/Produção, deve ser removido,
-	// exigindo estritamente autenticação via JWT (middleware.GetUserID).
-	isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
-	if userID == "" && !isProduction {
-		userID = c.Query("userId")
-	}
 	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
@@ -36,7 +29,11 @@ func (p *ProfileController) GetProfile(c *gin.Context) {
 
 	resp, err := p.profileService.GetProfile(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, domain.ErrNotFound) || errors.Is(err, service.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+		} else {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "profile service unavailable"})
+		}
 		return
 	}
 
@@ -46,20 +43,13 @@ func (p *ProfileController) GetProfile(c *gin.Context) {
 func (p *ProfileController) DeleteAccount(c *gin.Context) {
 	// Instead of query param, use the authenticated user ID injected by middleware
 	userID := middleware.GetUserID(c)
-	// [SECURITY AUDIT] ATENÇÃO: O fallback para c.Query("userId") é mantido exclusivamente
-	// para facilitar testes unitários. Em ambiente de Release/Produção, deve ser removido,
-	// exigindo estritamente autenticação via JWT (middleware.GetUserID).
-	isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
-	if userID == "" && !isProduction {
-		userID = c.Query("userId")
-	}
 	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
 	if err := p.profileService.DeleteAccount(c.Request.Context(), userID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Falha ao desativar conta: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Falha ao desativar conta"})
 		return
 	}
 
@@ -105,7 +95,7 @@ func (p *ProfileController) UpdateProfile(c *gin.Context) {
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile"})
 		return
 	}
 
@@ -139,7 +129,7 @@ func (p *ProfileController) UpdateProfilePhoto(c *gin.Context) {
 	}
 
 	if err := p.profileService.UpdateProfilePhoto(c.Request.Context(), userID, req.PhotoURL); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile photo: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile photo"})
 		return
 	}
 

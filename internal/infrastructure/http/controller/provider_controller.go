@@ -1,1115 +1,351 @@
 package controller
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"io"
-	"log/slog"
-	"math"
-	"net/http"
-	"os"
-	"strings"
-	"time"
-
 	"bikko-app/internal/domain"
 	"bikko-app/internal/infrastructure/http/middleware"
-	"bikko-app/internal/infrastructure/persistence/postgres"
-	"bikko-app/internal/infrastructure/push"
 	"bikko-app/internal/model"
-	"bikko-app/internal/repository"
-
+	"context"
+	"errors"
 	"github.com/gin-gonic/gin"
+	"log/slog"
+	"net/http"
+	"strings"
 )
 
 type ProviderController struct {
-	solRepo     *postgres.SolicitationPostgresRepository
+	solRepo     model.SolicitationRepository
 	serviceRepo domain.ServiceRepository
 	bikkerRepo  domain.BikkerRepository
-	pushService push.PushService
-	store       model.SolicitationStore
 }
 
-func NewProviderController() *ProviderController {
-	return &ProviderController{}
+func NewProviderController() *ProviderController { return &ProviderController{} }
+func NewProviderControllerWithDeps(repo model.SolicitationRepository, services domain.ServiceRepository, bikkers domain.BikkerRepository) *ProviderController {
+	return &ProviderController{solRepo: repo, serviceRepo: services, bikkerRepo: bikkers}
 }
-
-func NewProviderControllerWithDeps(
-	solRepo *postgres.SolicitationPostgresRepository,
-	serviceRepo domain.ServiceRepository,
-	bikkerRepo domain.BikkerRepository,
-	pushService ...push.PushService,
-) *ProviderController {
-	var ps push.PushService
-	if len(pushService) > 0 {
-		ps = pushService[0]
+func contractError(c *gin.Context, err error) {
+	status := http.StatusInternalServerError
+	code := "INTERNAL_ERROR"
+	switch {
+	case errors.Is(err, domain.ErrForbidden):
+		status = 403
+		code = "FORBIDDEN"
+	case errors.Is(err, domain.ErrNotFound):
+		status = 404
+		code = "NOT_FOUND"
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrOrderNotCompleted):
+		status = 409
+		code = "INVALID_STATE"
+	case errors.Is(err, domain.ErrAlreadyReviewed):
+		status = 409
+		code = "ALREADY_REVIEWED"
+	case errors.Is(err, domain.ErrInvalidInput), errors.Is(err, domain.ErrInvalidRating):
+		status = 400
+		code = "INVALID_INPUT"
+	case errors.Is(err, domain.ErrUnavailable):
+		status = 503
+		code = "DEPENDENCY_UNAVAILABLE"
 	}
-	return &ProviderController{
-		solRepo:     solRepo,
-		serviceRepo: serviceRepo,
-		bikkerRepo:  bikkerRepo,
-		pushService: ps,
+	if status >= 500 {
+		slog.Error("provider request failed", slog.Any("error", err))
 	}
+	c.JSON(status, gin.H{"error": code, "code": code})
 }
-
-func (pc *ProviderController) SetDependencies(
-	solRepo *postgres.SolicitationPostgresRepository,
-	serviceRepo domain.ServiceRepository,
-	bikkerRepo domain.BikkerRepository,
-	pushService ...push.PushService,
-) {
-	pc.solRepo = solRepo
-	pc.serviceRepo = serviceRepo
-	pc.bikkerRepo = bikkerRepo
-	if len(pushService) > 0 {
-		pc.pushService = pushService[0]
+func (p *ProviderController) actor(c *gin.Context) (string, bool) {
+	actor := middleware.GetUserID(c)
+	if actor == "" {
+		c.JSON(401, gin.H{"error": "UNAUTHORIZED"})
+		return "", false
 	}
+	if !c.GetBool("isBikker") {
+		contractError(c, domain.ErrForbidden)
+		return "", false
+	}
+	return actor, true
 }
-
-func (pc *ProviderController) SetSolicitationStore(store model.SolicitationStore) {
-	pc.store = store
-}
-
-func (pc *ProviderController) resolveProviderUserID(c *gin.Context) string {
-	userID := middleware.GetUserID(c)
-	if userID == "" {
-		userID = c.GetString("user_id")
-	}
-	// [SECURITY AUDIT] ATENÇÃO: O fallback para c.Query("bikker_id") é mantido exclusivamente
-	// para facilitar testes unitários e de integração mock. Em ambiente de Release/Produção, deve ser removido,
-	// exigindo estritamente autenticação via JWT (middleware.GetUserID).
-	isProduction := os.Getenv("ENV") == "production" || gin.Mode() == gin.ReleaseMode
-	if userID == "" && !isProduction {
-		userID = c.Query("bikker_id")
-	}
-	return strings.TrimSpace(userID)
-}
-
-func (pc *ProviderController) getExistingSolicitation(ctx context.Context, id string) *model.SolicitationItem {
-	if pc.solRepo != nil && pc.solRepo.HasPool() {
-		if sol, err := pc.solRepo.GetSolicitationByID(ctx, id); err == nil && sol != nil {
-			return sol
-		}
-	}
-	if pc.store != nil {
-		if sol := pc.store.GetInMemorySolicitationByID(id); sol != nil {
-			return sol
-		}
-	}
-	return nil
-}
-
-func (pc *ProviderController) isMatchingClientCounterOffer(existing *model.SolicitationItem, price float64) bool {
-	if existing == nil || price <= 0 {
+func (p *ProviderController) repository(c *gin.Context) bool {
+	if p.solRepo == nil {
+		contractError(c, domain.ErrUnavailable)
 		return false
 	}
-	if len(existing.CounterOffers) > 0 {
-		last := existing.CounterOffers[len(existing.CounterOffers)-1]
-		if (strings.EqualFold(last.Author, "CLIENT") || last.IsFromClient) && math.Abs(price-last.Price) < 0.01 {
-			return true
-		}
-	}
-	if existing.CounterOfferPrice != nil && *existing.CounterOfferPrice > 0 && math.Abs(price-*existing.CounterOfferPrice) < 0.01 {
-		return true
-	}
-	return false
+	return true
 }
-
-func (pc *ProviderController) GetFeed(c *gin.Context) {
-	empty := c.Query("empty") == "true"
-	userID := pc.resolveProviderUserID(c)
-
-	if empty || userID == "empty-qa-id" || userID == "11111111-0000-0000-0000-000000000101" {
-		c.JSON(http.StatusOK, []domain.OpportunityLead{})
+func (p *ProviderController) GetFeed(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok || !p.repository(c) {
 		return
 	}
-
-	if pc.solRepo != nil && pc.solRepo.HasPool() {
-		leads, err := pc.solRepo.GetProviderFeed(c.Request.Context(), userID)
-		if err == nil {
-			if leads == nil {
-				leads = []domain.OpportunityLead{}
-			}
-			c.JSON(http.StatusOK, leads)
-			return
-		}
+	items, err := p.solRepo.GetProviderFeed(c.Request.Context(), actor)
+	if err != nil {
+		contractError(c, err)
+		return
 	}
-
-	repo := repository.NewMockProviderRepository()
-	c.JSON(http.StatusOK, repo.GetMockLeads())
+	if items == nil {
+		items = []domain.OpportunityLead{}
+	}
+	c.JSON(200, items)
 }
-
-func formatBRLPrice(amount float64) string {
-	parts := strings.Split(fmt.Sprintf("%.2f", amount), ".")
-	intPart := parts[0]
-	decPart := parts[1]
-
-	var result []string
-	for len(intPart) > 3 {
-		result = append([]string{intPart[len(intPart)-3:]}, result...)
-		intPart = intPart[:len(intPart)-3]
-	}
-	if len(intPart) > 0 {
-		result = append([]string{intPart}, result...)
-	}
-	return strings.Join(result, ".") + "," + decPart
-}
-
-func (pc *ProviderController) buildQuoteDetailsResponse(id string, sol *model.SolicitationItem, extra map[string]interface{}) gin.H {
-	if sol == nil {
-		resp := gin.H{
-			"id": id,
-			"lead": domain.OpportunityLead{
-				ID:             id,
-				Title:          "Vazamento sob a pia",
-				Description:    "Cano estourou sob a pia da cozinha, precisa de reparo urgente.",
-				Category:       "Encanador",
-				Urgency:        "EMERGENCY",
-				Photos:         []string{},
-				PriceType:      "BUDGET_TO_NEGOTIATE",
-				DistanceKm:     2.5,
-				Neighborhood:   "Pinheiros, São Paulo - SP",
-				ClientName:     "Lucas Ferreira Mendes",
-				ClientVerified: true,
-				CreatedAt:      time.Now().Add(-1 * time.Hour),
-				ScheduledDate:  "O mais rápido possível",
-			},
-			"scheduled_date":        "O mais rápido possível",
-			"counter_offers":        []model.CounterOfferItem{},
-			"negotiation_count":     0,
-			"status":                "OPEN",
-			"client_rating":         "0.0",
-			"is_order_accepted":     false,
-			"is_proposal_sent":      false,
-			"show_negotiation_mode": false,
-		}
-		for k, v := range extra {
-			resp[k] = v
-		}
-		return resp
-	}
-
-	urgency := "SCHEDULED"
-	if strings.Contains(strings.ToLower(sol.Description), "urgente") || strings.Contains(strings.ToLower(sol.Description), "vazamento") {
-		urgency = "EMERGENCY"
-	}
-
-	counterOffers := make([]model.CounterOfferItem, 0, len(sol.CounterOffers))
-	for idx, offer := range sol.CounterOffers {
-		formatted := offer.FormattedPrice
-		if formatted == "" {
-			formatted = formatBRLPrice(offer.Price)
-		}
-		round := offer.Round
-		if round <= 0 {
-			round = idx + 1
-		}
-		offerID := offer.ID
-		if offerID == "" {
-			offerID = fmt.Sprintf("co_%d", round)
-		}
-		counterOffers = append(counterOffers, model.CounterOfferItem{
-			ID:             offerID,
-			Round:          round,
-			Author:         offer.Author,
-			IsFromClient:   offer.IsFromClient || strings.EqualFold(offer.Author, "CLIENT"),
-			Price:          offer.Price,
-			FormattedPrice: formatted,
-			Reason:         offer.Reason,
-			Photos:         offer.Photos,
-		})
-	}
-
-	hasBudget := sol.Price > 0 && (strings.EqualFold(sol.Status, "BUDGET_RECEIVED") ||
-		strings.EqualFold(sol.Status, "NEGOTIATING") ||
-		strings.EqualFold(sol.Status, "ACTIVE"))
-	if len(counterOffers) == 0 && hasBudget {
-		reason := "Incluso visita técnica, desmontagem e vedação."
-		if sol.CounterOfferMessage != nil && strings.TrimSpace(*sol.CounterOfferMessage) != "" {
-			reason = strings.TrimSpace(*sol.CounterOfferMessage)
-		}
-		counterOffers = append(counterOffers, model.CounterOfferItem{
-			ID:             "co_1",
-			Round:          1,
-			Author:         "PROVIDER",
-			IsFromClient:   false,
-			Price:          sol.Price,
-			FormattedPrice: formatBRLPrice(sol.Price),
-			Reason:         reason,
-		})
-	}
-
-	if len(counterOffers) > 5 {
-		counterOffers = counterOffers[:5]
-	}
-
-	hasValidPricedProposal := sol.Price > 0
-	for _, co := range counterOffers {
+func buildQuoteDetails(s *model.SolicitationItem) gin.H {
+	accepted := s.Status == "ACTIVE" || s.Status == "COMPLETED"
+	hasPrice := s.Price > 0
+	lead := domain.OpportunityLead{ID: s.ID, Title: s.ServiceName, ServiceTitle: s.ServiceName, Description: s.Description, Category: s.CategoryName, Urgency: "SCHEDULED", Photos: s.Photos, ClientPhotos: s.ClientPhotos, PriceType: "BUDGET_TO_NEGOTIATE", DistanceKm: s.DistanceKm, Neighborhood: s.Neighborhood, Address: s.Address, LocationAddress: s.LocationAddress, ClientName: s.ClientName, ContactName: s.ContactName, ClientPhone: s.AccountPhone, ContactPhone: s.ContactPhone, AccountPhone: s.AccountPhone, ClientAccountPhone: s.AccountPhone, ClientRating: s.ClientRating, CreatedAt: s.CreatedAt, ScheduledDate: s.PreferredDate, PreferredDate: s.PreferredDate}
+	var value, note *string
+	for i := len(s.CounterOffers) - 1; i >= 0; i-- {
+		co := s.CounterOffers[i]
 		if co.Price > 0 {
-			hasValidPricedProposal = true
-			break
-		}
-	}
-
-	isAccepted := strings.EqualFold(sol.Status, "ACTIVE") ||
-		strings.EqualFold(sol.Status, "ACCEPTED") ||
-		strings.EqualFold(sol.Status, "COMPLETED")
-	isProposalSent := (hasValidPricedProposal ||
-		strings.EqualFold(sol.Status, "BUDGET_RECEIVED") ||
-		(strings.EqualFold(sol.Status, "NEGOTIATING") && hasValidPricedProposal) ||
-		isAccepted) && hasValidPricedProposal
-	showNegotiationMode := hasValidPricedProposal && !isAccepted
-
-	var latestCounterValue *string
-	var latestCounterNote *string
-	for i := len(counterOffers) - 1; i >= 0; i-- {
-		if (counterOffers[i].IsFromClient || strings.EqualFold(counterOffers[i].Author, "CLIENT")) && counterOffers[i].Price > 0 {
-			val := counterOffers[i].FormattedPrice
-			note := counterOffers[i].Reason
-			latestCounterValue = &val
-			latestCounterNote = &note
-			break
-		}
-	}
-	if latestCounterValue == nil && len(counterOffers) > 0 {
-		last := counterOffers[len(counterOffers)-1]
-		if !last.IsFromClient && len(counterOffers) > 1 && last.Price > 0 {
-			val := last.FormattedPrice
-			note := last.Reason
-			latestCounterValue = &val
-			latestCounterNote = &note
-		}
-	}
-
-	category := sol.Category
-	if category == "" {
-		category = sol.ProviderTitle
-	}
-	if category == "" {
-		category = "Geral"
-	}
-	neighborhood := sol.LocationAddress
-	if neighborhood == "" {
-		neighborhood = sol.Address
-	}
-	if neighborhood == "" {
-		neighborhood = sol.Neighborhood
-	}
-	if neighborhood == "" {
-		neighborhood = "São Paulo, SP"
-	}
-	clientName := sol.ClientName
-	if clientName == "" {
-		clientName = "Lucas Ferreira Mendes"
-	}
-
-	clientRating := sol.ClientRating
-	if clientRating == "" || clientRating == "0" || clientRating == "0.0" || sol.ClientTotalRatings == 0 {
-		clientRating = "0.0"
-	}
-
-	contactPhone := sol.ContactPhone
-	accountPhone := sol.AccountPhone
-	if accountPhone == "" {
-		accountPhone = sol.ClientAccountPhone
-	}
-
-	photos := sol.ClientPhotos
-	if len(photos) == 0 {
-		photos = sol.Photos
-	}
-	for _, co := range counterOffers {
-		for _, p := range co.Photos {
-			if p != "" {
-				photos = append(photos, p)
+			if !co.IsFromClient {
+				break
 			}
+			v := co.FormattedPrice
+			n := co.Reason
+			value = &v
+			note = &n
+			break
 		}
 	}
-	if photos == nil {
-		photos = []string{}
-	}
-
-	preferredDate := normalizePreferredDate(sol.ScheduledDate)
-
-	resp := gin.H{
-		"id": sol.ID,
-		"lead": domain.OpportunityLead{
-			ID:                 sol.ID,
-			Title:              sol.ServiceName,
-			Description:        sol.Description,
-			Category:           category,
-			Urgency:            urgency,
-			Photos:             photos,
-			ClientPhotos:       photos,
-			PriceType:          "BUDGET_TO_NEGOTIATE",
-			DistanceKm:         2.5,
-			Neighborhood:       neighborhood,
-			Address:            neighborhood,
-			LocationAddress:    neighborhood,
-			ClientName:         clientName,
-			ContactName:        sol.ContactName,
-			ContactPhone:       contactPhone,
-			AccountPhone:       accountPhone,
-			ClientPhone:        accountPhone,
-			ClientAccountPhone: accountPhone,
-			ClientRating:       clientRating,
-			ClientVerified:     true,
-			CreatedAt:          time.Now().Add(-1 * time.Hour),
-			ScheduledDate:      preferredDate,
-			PreferredDate:      preferredDate,
-		},
-		"solicitation":          sol,
-		"client_name":           clientName,
-		"address":               neighborhood,
-		"location_address":      neighborhood,
-		"contact_name":          sol.ContactName,
-		"contact_phone":         contactPhone,
-		"client_phone":          accountPhone,
-		"account_phone":         accountPhone,
-		"client_rating":         clientRating,
-		"scheduled_date":        preferredDate,
-		"preferred_date":        preferredDate,
-		"counter_offers":        counterOffers,
-		"counter_offer_history": counterOffers,
-		"negotiation_count":     sol.RenegotiationCount,
-		"status":                sol.Status,
-		"is_order_accepted":     isAccepted,
-		"is_proposal_sent":      isProposalSent,
-		"show_negotiation_mode": showNegotiationMode,
-		"latest_counter_value":  latestCounterValue,
-		"latest_counter_note":   latestCounterNote,
-	}
-	for k, v := range extra {
-		resp[k] = v
-	}
-	return resp
+	return gin.H{"id": s.ID, "lead": lead, "solicitation": s, "client_name": s.ClientName, "address": s.Address, "location_address": s.LocationAddress, "contact_name": s.ContactName, "contact_phone": s.ContactPhone, "client_phone": s.AccountPhone, "account_phone": s.AccountPhone, "client_rating": s.ClientRating, "scheduled_date": s.PreferredDate, "preferred_date": s.PreferredDate, "counter_offers": s.CounterOffers, "counter_offer_history": s.CounterOffers, "negotiation_count": s.RenegotiationCount, "status": s.Status, "is_order_accepted": accepted, "is_proposal_sent": hasPrice, "show_negotiation_mode": hasPrice && !accepted && s.Status != "CANCELLED", "latest_counter_value": value, "latest_counter_note": note}
 }
-
-func (pc *ProviderController) GetSolicitationDetails(c *gin.Context) {
-	id := c.Param("id")
-	sol := pc.getExistingSolicitation(c.Request.Context(), id)
-	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, sol, nil))
-}
-
-func (pc *ProviderController) handleAcceptCounterOffer(
-	c *gin.Context,
-	id string,
-	userID string,
-	price float64,
-	note string,
-	existing *model.SolicitationItem,
-) {
-	finalPrice := price
-	if finalPrice <= 0 && existing != nil {
-		if existing.CounterOfferPrice != nil && *existing.CounterOfferPrice > 0 {
-			finalPrice = *existing.CounterOfferPrice
-		} else if existing.Price > 0 {
-			finalPrice = existing.Price
-		}
-	}
-
-	var updated *model.SolicitationItem
-	if pc.solRepo != nil && pc.solRepo.HasPool() {
-		if res, err := pc.solRepo.AcceptCounterOffer(c.Request.Context(), id, userID, finalPrice, note); err == nil && res != nil {
-			updated = res
-		}
-	}
-
-	if pc.store != nil {
-		inMem := pc.store.ApplyProviderProposalInMemory(id, userID, finalPrice, note, true)
-		if updated != nil {
-			pc.store.SyncSolicitationInMemory(*updated)
-		} else {
-			updated = inMem
-		}
-	}
-
-	if updated == nil {
-		updated = &model.SolicitationItem{
-			ID:          id,
-			ClientID:    "11111111-0000-0000-0000-000000000099",
-			ProviderID:  userID,
-			ServiceName: "Solicitação de Serviço",
-			Status:      "ACTIVE",
-			Price:       finalPrice,
-		}
-	}
-
-	if pc.pushService != nil && updated.ClientID != "" {
-		pushData := map[string]string{
-			"solicitation_id": updated.ID,
-			"type":            "accepted",
-		}
-		if pushErr := pc.pushService.SendNotification(
-			c.Request.Context(),
-			updated.ClientID,
-			"Proposta Aceita pelo Profissional! 🎉",
-			"O profissional aceitou sua contraproposta! O serviço está confirmado no seu histórico de pedidos.",
-			pushData,
-		); pushErr != nil {
-			slog.Error("failed to send accepted proposal push notification",
-				slog.String("solicitation_id", updated.ID),
-				slog.Any("error", pushErr),
-			)
-		}
-	}
-
-	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
-		"status":  "ACTIVE",
-		"message": "Proposta aceita com sucesso.",
-	}))
-}
-
-func (pc *ProviderController) AcceptCounterOffer(c *gin.Context) {
-	id := c.Param("id")
-	var req domain.ProposalRequest
-	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+func (p *ProviderController) GetSolicitationDetails(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok || !p.repository(c) {
 		return
 	}
-
-	existing := pc.getExistingSolicitation(c.Request.Context(), id)
-	pc.handleAcceptCounterOffer(c, id, pc.resolveProviderUserID(c), req.Price, req.Note, existing)
+	s, err := p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
+	if err != nil {
+		contractError(c, err)
+		return
+	}
+	if s.ProviderID != actor {
+		contractError(c, domain.ErrForbidden)
+		return
+	}
+	c.JSON(200, buildQuoteDetails(s))
 }
-
-func (pc *ProviderController) SubmitProposal(c *gin.Context) {
-	id := c.Param("id")
+func (p *ProviderController) command(c *gin.Context, actor string, in model.SolicitationStatusUpdateInput) {
+	in.ActorID = actor
+	in.RequestKey = c.GetHeader("Idempotency-Key")
+	s, err := p.solRepo.GetSolicitationForUser(c.Request.Context(), c.Param("id"), actor)
+	if err != nil {
+		contractError(c, err)
+		return
+	}
+	if s.ProviderID != actor {
+		contractError(c, domain.ErrForbidden)
+		return
+	}
+	s, err = p.solRepo.UpdateSolicitationStatus(c.Request.Context(), c.Param("id"), in)
+	if err != nil {
+		contractError(c, err)
+		return
+	}
+	c.JSON(200, buildQuoteDetails(s))
+}
+func (p *ProviderController) SubmitProposal(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok || !p.repository(c) {
+		return
+	}
 	var req domain.ProposalRequest
-	queryAccept := strings.EqualFold(c.Query("accept_counter_offer"), "true") || strings.EqualFold(c.Query("accepted"), "true")
 	if err := c.ShouldBindJSON(&req); err != nil {
-		if !(err == io.EOF && queryAccept) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
-	existing := pc.getExistingSolicitation(c.Request.Context(), id)
-	accepting := req.Accepted || req.AcceptCounterOffer || queryAccept || pc.isMatchingClientCounterOffer(existing, req.Price)
-
-	if !accepting && req.Price <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "preço da proposta é obrigatório"})
+		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-
-	userID := pc.resolveProviderUserID(c)
-	if accepting {
-		pc.handleAcceptCounterOffer(c, id, userID, req.Price, req.Note, existing)
-		return
+	in := model.SolicitationStatusUpdateInput{Status: "BUDGET_RECEIVED", CounterOfferPrice: &req.Price, CounterOfferMessage: &req.Note}
+	if req.Accepted || req.AcceptCounterOffer {
+		in = model.SolicitationStatusUpdateInput{Status: "ACTIVE"}
 	}
-
-	isCounterOffer := existing != nil && (existing.RenegotiationCount > 0 || existing.CounterOfferPrice != nil)
-
-	var updated *model.SolicitationItem
-	if pc.solRepo != nil && pc.solRepo.HasPool() {
-		if res, err := pc.solRepo.SubmitProviderProposal(
-			c.Request.Context(),
-			id,
-			userID,
-			req.Price,
-			req.Note,
-		); err == nil && res != nil {
-			updated = res
-		}
-	}
-
-	if pc.store != nil {
-		inMem := pc.store.ApplyProviderProposalInMemory(id, userID, req.Price, req.Note, false)
-		if updated != nil {
-			pc.store.SyncSolicitationInMemory(*updated)
-		} else {
-			updated = inMem
-		}
-	}
-
-	if updated != nil {
-		if pc.pushService != nil && updated.ClientID != "" {
-			pushTitle := "Novo Orçamento Recebido! 💬"
-			pushBody := fmt.Sprintf("O profissional enviou um orçamento de R$ %.2f para %s.", req.Price, updated.ServiceName)
-			pushType := "budget_received"
-			if isCounterOffer {
-				pushTitle = "Nova Contraproposta do Profissional! 💬"
-				pushBody = fmt.Sprintf("O profissional enviou uma contraproposta de R$ %.2f para %s.", req.Price, updated.ServiceName)
-				pushType = "counter_offer"
-			}
-			pushData := map[string]string{
-				"solicitation_id": updated.ID,
-				"type":            pushType,
-			}
-			if pushErr := pc.pushService.SendNotification(
-				c.Request.Context(),
-				updated.ClientID,
-				pushTitle,
-				pushBody,
-				pushData,
-			); pushErr != nil {
-				slog.Error("failed to send proposal push notification",
-					slog.String("solicitation_id", updated.ID),
-					slog.Any("error", pushErr),
-				)
-			}
-		}
-
-		c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
-			"message": "Proposta enviada com sucesso.",
-		}))
-		return
-	}
-
-	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, nil, map[string]interface{}{
-		"status":  "BUDGET_RECEIVED",
-		"message": "Proposta enviada com sucesso.",
-	}))
+	p.command(c, actor, in)
 }
-
-func (pc *ProviderController) SubmitCounterOffer(c *gin.Context) {
-	id := c.Param("id")
+func (p *ProviderController) SubmitCounterOffer(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok || !p.repository(c) {
+		return
+	}
 	var req domain.CounterOfferRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-
-	counterPrice := req.CounterPrice
-	if counterPrice <= 0 && req.Price > 0 {
-		counterPrice = req.Price
+	price := req.CounterPrice
+	if price == 0 {
+		price = req.Price
 	}
-	reason := strings.TrimSpace(req.Reason)
-	if reason == "" && strings.TrimSpace(req.Note) != "" {
-		reason = strings.TrimSpace(req.Note)
+	note := req.Reason
+	if note == "" {
+		note = req.Note
 	}
-
-	existing := pc.getExistingSolicitation(c.Request.Context(), id)
-	queryAccept := strings.EqualFold(c.Query("accept_counter_offer"), "true") || strings.EqualFold(c.Query("accepted"), "true")
-	accepting := req.Accepted || req.AcceptCounterOffer || queryAccept || pc.isMatchingClientCounterOffer(existing, counterPrice)
-
-	userID := pc.resolveProviderUserID(c)
-	if accepting {
-		pc.handleAcceptCounterOffer(c, id, userID, counterPrice, reason, existing)
-		return
+	in := model.SolicitationStatusUpdateInput{Status: "NEGOTIATING", CounterOfferPrice: &price, CounterOfferMessage: &note}
+	if req.Accepted || req.AcceptCounterOffer {
+		in = model.SolicitationStatusUpdateInput{Status: "ACTIVE"}
 	}
-
-	if counterPrice <= 0 && reason == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "preço da contraproposta ou mensagem com detalhes necessários é obrigatório"})
-		return
-	}
-
-	var updated *model.SolicitationItem
-	if pc.solRepo != nil && pc.solRepo.HasPool() {
-		providerRole := "PROVIDER"
-		statusToSet := "BUDGET_RECEIVED"
-		if counterPrice <= 0 {
-			statusToSet = "PENDING_BUDGET"
-		}
-		if res, err := pc.solRepo.UpdateSolicitationStatus(c.Request.Context(), id, postgres.SolicitationStatusUpdateInput{
-			Status:              statusToSet,
-			CounterOfferPrice:   &counterPrice,
-			CounterOfferMessage: &reason,
-			SenderRole:          &providerRole,
-			SenderID:            &userID,
-		}); err == nil && res != nil {
-			updated = res
-		}
-	}
-
-	if pc.store != nil {
-		inMem := pc.store.ApplyProviderCounterOfferInMemory(id, userID, counterPrice, reason)
-		if updated != nil {
-			pc.store.SyncSolicitationInMemory(*updated)
-		} else {
-			updated = inMem
-		}
-	}
-
-	if updated != nil {
-		if pc.pushService != nil && updated.ClientID != "" {
-			pushData := map[string]string{
-				"solicitation_id": updated.ID,
-				"type":            "counter_offer",
-			}
-			pushTitle := "Nova Contraproposta do Profissional! 💬"
-			pushMessage := fmt.Sprintf("O profissional enviou uma contraproposta de R$ %.2f para %s.", counterPrice, updated.ServiceName)
-			if counterPrice <= 0 {
-				pushTitle = "Pedido de mais informações 💬"
-				pushMessage = fmt.Sprintf("O profissional solicitou mais detalhes para %s.", updated.ServiceName)
-			}
-			if pushErr := pc.pushService.SendNotification(
-				c.Request.Context(),
-				updated.ClientID,
-				pushTitle,
-				pushMessage,
-				pushData,
-			); pushErr != nil {
-				slog.Error("failed to send counter-offer push notification",
-					slog.String("solicitation_id", updated.ID),
-					slog.Any("error", pushErr),
-				)
-			}
-		}
-
-		c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
-			"message": "Contra-proposta enviada com sucesso.",
-		}))
-		return
-	}
-
-	fallbackStatus := "BUDGET_RECEIVED"
-	if counterPrice <= 0 {
-		fallbackStatus = "PENDING_BUDGET"
-	}
-	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, nil, map[string]interface{}{
-		"status":            fallbackStatus,
-		"message":           "Contra-proposta enviada com sucesso.",
-		"negotiation_count": 1,
-	}))
+	p.command(c, actor, in)
 }
-
-func (pc *ProviderController) RejectSolicitation(c *gin.Context) {
-	id := c.Param("id")
+func (p *ProviderController) AcceptCounterOffer(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok || !p.repository(c) {
+		return
+	}
+	p.command(c, actor, model.SolicitationStatusUpdateInput{Status: "ACTIVE"})
+}
+func (p *ProviderController) RejectSolicitation(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok || !p.repository(c) {
+		return
+	}
 	var req domain.RejectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-
-	reason := strings.TrimSpace(req.Reason)
+	reason := req.Reason
 	if reason == "" {
-		reason = strings.TrimSpace(req.ReasonChip)
-	}
-	if reason == "" {
-		reason = strings.TrimSpace(req.CancellationReason)
-	}
-	note := strings.TrimSpace(req.Note)
-	if note != "" {
-		if reason != "" && !strings.Contains(reason, note) {
-			reason = reason + " - " + note
-		} else if reason == "" {
-			reason = note
-		}
+		reason = req.CancellationReason
 	}
 	if reason == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "motivo da rejeição é obrigatório"})
-		return
+		reason = req.ReasonChip
 	}
-
-	providerRole := "PROVIDER"
-	userID := pc.resolveProviderUserID(c)
-
-	var updated *model.SolicitationItem
-	if pc.solRepo != nil && pc.solRepo.HasPool() {
-		if res, err := pc.solRepo.UpdateSolicitationStatus(c.Request.Context(), id, postgres.SolicitationStatusUpdateInput{
-			Status:             "CANCELLED",
-			CancellationReason: &reason,
-			CancelledBy:        &providerRole,
-			SenderRole:         &providerRole,
-			SenderID:           &userID,
-		}); err == nil && res != nil {
-			updated = res
-		}
-	}
-
-	if pc.store != nil {
-		inMem := pc.store.ApplyProviderRejectInMemory(id, userID, reason)
-		if updated != nil {
-			pc.store.SyncSolicitationInMemory(*updated)
-		} else {
-			updated = inMem
-		}
-	}
-
-	if pc.pushService != nil && updated != nil && updated.ClientID != "" {
-		pushData := map[string]string{
-			"solicitation_id": updated.ID,
-			"type":            "cancelled",
-		}
-		if pushErr := pc.pushService.SendNotification(
-			c.Request.Context(),
-			updated.ClientID,
-			"Solicitação Cancelada pelo Profissional",
-			fmt.Sprintf("O profissional não pôde atender sua solicitação. Motivo: %s", reason),
-			pushData,
-		); pushErr != nil {
-			slog.Error("failed to send reject push notification",
-				slog.String("solicitation_id", updated.ID),
-				slog.Any("error", pushErr),
-			)
-		}
-	}
-
-	c.JSON(http.StatusOK, pc.buildQuoteDetailsResponse(id, updated, map[string]interface{}{
-		"status":              "CANCELLED",
-		"message":             "Solicitação rejeitada.",
-		"cancelled_by":        providerRole,
-		"cancellation_reason": reason,
-	}))
+	p.command(c, actor, model.SolicitationStatusUpdateInput{Status: "CANCELLED", CancellationReason: &reason})
 }
-
-func (pc *ProviderController) GetPortfolio(c *gin.Context) {
-	empty := c.Query("empty") == "true"
-	userID := pc.resolveProviderUserID(c)
-	if empty || userID == "empty-qa-id" || userID == "11111111-0000-0000-0000-000000000101" {
-		c.JSON(http.StatusOK, []domain.PortfolioItem{})
+func (p *ProviderController) GetPortfolio(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok {
 		return
 	}
-
-	if pc.serviceRepo != nil {
-		targetBikkerID := userID
-		if targetBikkerID == "" {
-			targetBikkerID = "22222222-2222-2222-2222-222222222222"
-		}
-		var services []domain.Service
-		var err error
-		if allRepo, ok := pc.serviceRepo.(domain.BikkerAllServicesRepository); ok {
-			services, err = allRepo.GetServicesByBikkerID(c.Request.Context(), targetBikkerID)
-		} else {
-			services, err = pc.serviceRepo.GetActiveServicesByBikkerID(c.Request.Context(), targetBikkerID)
-		}
-		if err == nil {
-			items := make([]domain.PortfolioItem, 0, len(services))
-			for _, s := range services {
-				catName := "Geral"
-				if s.Category != nil && s.Category.Name != "" {
-					catName = s.Category.Name
-				}
-				img := s.ThumbnailURL
-				if img == "" && len(s.Photos) > 0 {
-					img = s.Photos[0]
-				}
-				completedAt := s.CreatedAt
-				if completedAt.IsZero() {
-					completedAt = time.Now().Add(-7 * 24 * time.Hour)
-				}
-				active := s.IsActive
-				items = append(items, domain.PortfolioItem{
-					ID:             s.ID,
-					Title:          s.Name,
-					Category:       catName,
-					Description:    s.Description,
-					ImageUrl:       img,
-					Photos:         s.Photos,
-					IsActive:       &active,
-					CompletedAt:    completedAt,
-					ReviewsAverage: s.ReviewsAverage,
-					TotalReviews:   s.TotalReviews,
-				})
-			}
-			c.JSON(http.StatusOK, items)
-			return
-		}
+	repo, ok := p.serviceRepo.(domain.BikkerAllServicesRepository)
+	if !ok {
+		contractError(c, domain.ErrUnavailable)
+		return
 	}
-
-	repo := repository.NewMockProviderRepository()
-	c.JSON(http.StatusOK, repo.GetMockPortfolio())
+	services, err := repo.GetServicesByBikkerID(c.Request.Context(), actor)
+	if err != nil {
+		contractError(c, err)
+		return
+	}
+	items := make([]domain.PortfolioItem, 0, len(services))
+	for _, s := range services {
+		items = append(items, portfolioItem(&s))
+	}
+	c.JSON(200, items)
 }
-
-func (pc *ProviderController) AddPortfolioItem(c *gin.Context) {
+func portfolioItem(s *domain.Service) domain.PortfolioItem {
+	category := ""
+	if s.Category != nil {
+		category = s.Category.Name
+	}
+	active := s.IsActive
+	return domain.PortfolioItem{ID: s.ID, Title: s.Name, Category: category, Description: s.Description, ImageUrl: s.ThumbnailURL, Photos: s.Photos, IsActive: &active, CompletedAt: s.CreatedAt, ReviewsAverage: s.ReviewsAverage, TotalReviews: s.TotalReviews}
+}
+func (p *ProviderController) portfolioMutation(c *gin.Context, update bool) {
+	actor, ok := p.actor(c)
+	if !ok {
+		return
+	}
+	repo, ok := p.serviceRepo.(domain.ServiceMutationRepository)
+	if !ok {
+		contractError(c, domain.ErrUnavailable)
+		return
+	}
 	var req domain.PortfolioCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "corpo da requisição inválido: " + err.Error()})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		title = strings.TrimSpace(req.Name)
 	}
-	catInput := strings.TrimSpace(req.CategoryID)
-	if catInput == "" {
-		catInput = strings.TrimSpace(req.Category)
+	category := req.CategoryID
+	if category == "" {
+		category = req.Category
 	}
-	imgURL := strings.TrimSpace(req.ImageURL)
-	if imgURL == "" {
-		imgURL = strings.TrimSpace(req.ThumbnailURL)
+	thumbnail := req.ImageURL
+	if thumbnail == "" {
+		thumbnail = req.ThumbnailURL
 	}
-	if imgURL == "" && len(req.Photos) > 0 {
-		imgURL = req.Photos[0]
+	active := true
+	if req.IsActive != nil {
+		active = *req.IsActive
 	}
-
-	if mutator, ok := pc.serviceRepo.(domain.ServiceMutationRepository); ok && title != "" {
-		bikkerID := pc.resolveProviderUserID(c)
-		if bikkerID == "" {
-			bikkerID = "11111111-0000-0000-0000-000000000100"
-		}
-		lat := -23.55052
-		lon := -46.63330
-		if req.Latitude != nil {
-			lat = *req.Latitude
-		}
-		if req.Longitude != nil {
-			lon = *req.Longitude
-		}
-
-		isActive := true
-		if req.IsActive != nil {
-			isActive = *req.IsActive
-		}
-
-		if strings.TrimSpace(req.ID) != "" {
-			if updated, err := mutator.UpdateService(c.Request.Context(), &domain.Service{
-				ID:           strings.TrimSpace(req.ID),
-				BikkerID:     bikkerID,
-				CategoryID:   catInput,
-				Name:         title,
-				Description:  req.Description,
-				ThumbnailURL: imgURL,
-				Photos:       req.Photos,
-				Latitude:     lat,
-				Longitude:    lon,
-				IsActive:     isActive,
-			}); err == nil && updated != nil {
-				catName := req.Category
-				if updated.Category != nil && updated.Category.Name != "" {
-					catName = updated.Category.Name
-				}
-				active := updated.IsActive
-				c.JSON(http.StatusOK, gin.H{
-					"status": "updated",
-					"id":     updated.ID,
-					"item": domain.PortfolioItem{
-						ID:          updated.ID,
-						Title:       updated.Name,
-						Category:    catName,
-						Description: updated.Description,
-						ImageUrl:    updated.ThumbnailURL,
-						Photos:      updated.Photos,
-						IsActive:    &active,
-						CompletedAt: updated.CreatedAt,
-					},
-				})
-				return
-			}
-		}
-
-		created, err := mutator.CreateService(c.Request.Context(), &domain.Service{
-			BikkerID:     bikkerID,
-			CategoryID:   catInput,
-			Name:         title,
-			Description:  req.Description,
-			ThumbnailURL: imgURL,
-			Photos:       req.Photos,
-			Latitude:     lat,
-			Longitude:    lon,
-			IsActive:     isActive,
-		})
-		if err == nil && created != nil {
-			catName := req.Category
-			if created.Category != nil && created.Category.Name != "" {
-				catName = created.Category.Name
-			}
-			active := created.IsActive
-			c.JSON(http.StatusCreated, gin.H{
-				"status": "added",
-				"id":     created.ID,
-				"item": domain.PortfolioItem{
-					ID:          created.ID,
-					Title:       created.Name,
-					Category:    catName,
-					Description: created.Description,
-					ImageUrl:    created.ThumbnailURL,
-					Photos:      created.Photos,
-					IsActive:    &active,
-					CompletedAt: created.CreatedAt,
-				},
-			})
+	s := &domain.Service{BikkerID: actor, Name: title, CategoryID: category, Description: strings.TrimSpace(req.Description), ThumbnailURL: thumbnail, Photos: req.Photos, IsActive: active}
+	var err error
+	if update {
+		s.ID = c.Param("id")
+		s, err = repo.UpdateService(c.Request.Context(), s)
+	} else {
+		if req.Latitude == nil || req.Longitude == nil {
+			contractError(c, domain.ErrInvalidInput)
 			return
 		}
+		s.Latitude = *req.Latitude
+		s.Longitude = *req.Longitude
+		s, err = repo.CreateService(c.Request.Context(), s)
 	}
-
-	c.JSON(http.StatusCreated, gin.H{"status": "added", "id": "port-new"})
-}
-
-func (pc *ProviderController) UpdatePortfolioItem(c *gin.Context) {
-	id := strings.TrimSpace(c.Param("id"))
-	var req domain.PortfolioCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "corpo da requisição inválido: " + err.Error()})
+	if err != nil {
+		contractError(c, err)
 		return
 	}
-
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		title = strings.TrimSpace(req.Name)
+	status := http.StatusCreated
+	action := "added"
+	if update {
+		status = 200
+		action = "updated"
 	}
-	catInput := strings.TrimSpace(req.CategoryID)
-	if catInput == "" {
-		catInput = strings.TrimSpace(req.Category)
-	}
-	imgURL := strings.TrimSpace(req.ImageURL)
-	if imgURL == "" {
-		imgURL = strings.TrimSpace(req.ThumbnailURL)
-	}
-	if imgURL == "" && len(req.Photos) > 0 {
-		imgURL = req.Photos[0]
-	}
-
-	if mutator, ok := pc.serviceRepo.(domain.ServiceMutationRepository); ok && id != "" {
-		bikkerID := pc.resolveProviderUserID(c)
-		isActive := true
-		if req.IsActive != nil {
-			isActive = *req.IsActive
-		}
-
-		updated, err := mutator.UpdateService(c.Request.Context(), &domain.Service{
-			ID:           id,
-			BikkerID:     bikkerID,
-			CategoryID:   catInput,
-			Name:         title,
-			Description:  req.Description,
-			ThumbnailURL: imgURL,
-			Photos:       req.Photos,
-			IsActive:     isActive,
-		})
-		if err == nil && updated != nil {
-			catName := req.Category
-			if updated.Category != nil && updated.Category.Name != "" {
-				catName = updated.Category.Name
-			}
-			active := updated.IsActive
-			c.JSON(http.StatusOK, gin.H{
-				"status": "updated",
-				"id":     updated.ID,
-				"item": domain.PortfolioItem{
-					ID:          updated.ID,
-					Title:       updated.Name,
-					Category:    catName,
-					Description: updated.Description,
-					ImageUrl:    updated.ThumbnailURL,
-					Photos:      updated.Photos,
-					IsActive:    &active,
-					CompletedAt: updated.CreatedAt,
-				},
-			})
-			return
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "updated", "id": id})
+	c.JSON(status, gin.H{"status": action, "id": s.ID, "item": portfolioItem(s)})
 }
-
-func (pc *ProviderController) DeletePortfolioItem(c *gin.Context) {
-	id := c.Param("id")
-	bikkerID := pc.resolveProviderUserID(c)
-
-	if mutator, ok := pc.serviceRepo.(domain.ServiceMutationRepository); ok {
-		if err := mutator.DeleteService(c.Request.Context(), id, bikkerID); err == nil {
-			c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
-			return
-		}
+func (p *ProviderController) AddPortfolioItem(c *gin.Context)    { p.portfolioMutation(c, false) }
+func (p *ProviderController) UpdatePortfolioItem(c *gin.Context) { p.portfolioMutation(c, true) }
+func (p *ProviderController) DeletePortfolioItem(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok {
+		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
+	repo, ok := p.serviceRepo.(domain.ServiceMutationRepository)
+	if !ok {
+		contractError(c, domain.ErrUnavailable)
+		return
+	}
+	if err := repo.DeleteService(c.Request.Context(), c.Param("id"), actor); err != nil {
+		contractError(c, err)
+		return
+	}
+	c.JSON(200, gin.H{"status": "deleted", "id": c.Param("id")})
 }
-
-func (pc *ProviderController) UpdateProviderProfile(c *gin.Context) {
+func (p *ProviderController) UpdateProviderProfile(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok {
+		return
+	}
+	repo, ok := p.bikkerRepo.(interface {
+		UpdateProviderProfile(context.Context, string, domain.ProviderProfileUpdateRequest) (*domain.BikkerProfileResponse, error)
+	})
+	if !ok {
+		contractError(c, domain.ErrUnavailable)
+		return
+	}
 	var req domain.ProviderProfileUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-
-	bikkerID := pc.resolveProviderUserID(c)
-	if bikkerID == "" {
-		bikkerID = "11111111-0000-0000-0000-000000000100"
+	profile, err := repo.UpdateProviderProfile(c.Request.Context(), actor, req)
+	if err != nil {
+		contractError(c, err)
+		return
 	}
-
-	lat := -23.55052
-	lon := -46.63330
-	if req.Latitude != nil {
-		lat = *req.Latitude
-	}
-	if req.Longitude != nil {
-		lon = *req.Longitude
-	}
-	isActive := true
-	if req.IsActive != nil {
-		isActive = *req.IsActive
-		repository.SetMockProviderActive(*req.IsActive)
-	}
-
-	if updater, ok := pc.bikkerRepo.(domain.BikkerProfileUpdater); ok {
-		profile, err := updater.UpsertBikkerProfile(c.Request.Context(), &domain.Bikker{
-			ID:              bikkerID,
-			Profession:      strings.TrimSpace(req.Profession),
-			ExperienceYears: strings.TrimSpace(req.ExperienceYears),
-			Description:     strings.TrimSpace(req.Description),
-			LocationName:    strings.TrimSpace(req.LocationName),
-			Latitude:        lat,
-			Longitude:       lon,
-			IsActive:        isActive,
-		})
-		if err == nil && profile != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"status":  "updated",
-				"message": "Perfil profissional atualizado com sucesso.",
-				"profile": profile,
-			})
-			return
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "updated",
-		"message": "Perfil profissional atualizado com sucesso.",
-	})
+	c.JSON(200, gin.H{"status": "updated", "profile": profile})
 }
-
-func (pc *ProviderController) SubmitClientEvaluation(c *gin.Context) {
+func (p *ProviderController) SubmitClientEvaluation(c *gin.Context) {
+	actor, ok := p.actor(c)
+	if !ok || !p.repository(c) {
+		return
+	}
 	var req domain.ClientEvaluationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		contractError(c, domain.ErrInvalidInput)
 		return
 	}
-	if req.Stars < 1 || req.Stars > 5 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "as estrelas devem ser entre 1 e 5"})
+	if err := p.solRepo.SubmitClientEvaluation(c.Request.Context(), req.SolicitationID, actor, req); err != nil {
+		contractError(c, err)
 		return
 	}
-	if len([]rune(req.TechnicalReport)) > 280 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "relatório técnico deve ter no máximo 280 caracteres"})
-		return
-	}
-	if len([]rune(req.Comment)) > 120 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "comentário deve ter no máximo 120 caracteres"})
-		return
-	}
-
-	if pc.solRepo != nil && pc.solRepo.HasPool() && req.SolicitationID != "" {
-		if err := pc.solRepo.SubmitClientEvaluation(
-			c.Request.Context(),
-			req.SolicitationID,
-			pc.resolveProviderUserID(c),
-			req,
-		); err != nil {
-			if errors.Is(err, domain.ErrAlreadyReviewed) {
-				c.JSON(http.StatusConflict, gin.H{
-					"code":    "ALREADY_REVIEWED",
-					"error":   "ALREADY_REVIEWED",
-					"message": "Este cliente já foi avaliado anteriormente.",
-				})
-				return
-			}
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":           "evaluated",
-		"message":          "Relatório técnico e avaliação salvos com sucesso.",
-		"technical_report": req.TechnicalReport,
-	})
+	c.JSON(200, gin.H{"status": "evaluated", "technical_report": req.TechnicalReport})
 }
-
-var validDropDownDates = []string{
-	"O mais rápido possível",
-	"Próximos 7 dias",
-	"Próximos 15 dias",
-	"Próximos 30 dias",
-}
-
-func normalizePreferredDate(raw string) string {
-	raw = strings.TrimSpace(raw)
-	for _, d := range validDropDownDates {
-		if strings.EqualFold(raw, d) {
-			return d
-		}
-	}
-	return "O mais rápido possível"
-}
-

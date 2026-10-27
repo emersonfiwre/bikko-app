@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"bikko-app/internal/domain"
 	"bikko-app/internal/model"
 	"bikko-app/internal/service"
 
@@ -104,41 +105,31 @@ func TestProfileController_GetProfile(t *testing.T) {
 		}
 	})
 
-	t.Run("fallback to query param userId if unauthenticated", func(t *testing.T) {
-		svc := &fakeProfileService{
-			getProfileFunc: func(ctx context.Context, userID string) (*model.ProfileResponse, error) {
-				if userID != "query_user_456" {
-					t.Errorf("expected userID 'query_user_456', got '%s'", userID)
-				}
-				return &model.ProfileResponse{ID: userID, Name: "Query User"}, nil
-			},
-		}
-
+	t.Run("query param cannot select unauthenticated identity", func(t *testing.T) {
+		called := false
+		svc := &fakeProfileService{getProfileFunc: func(context.Context, string) (*model.ProfileResponse, error) { called = true; return nil, nil }}
 		ctrl := NewProfileController(svc)
 		router := gin.New()
 		router.GET("/profile", ctrl.GetProfile)
-
-		req, _ := http.NewRequest(http.MethodGet, "/profile?userId=query_user_456", nil)
 		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		if w.Code != http.StatusOK {
-			t.Fatalf("expected status 200, got %d", w.Code)
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/profile?userId=victim", nil))
+		if w.Code != http.StatusUnauthorized || called {
+			t.Fatalf("unauthenticated profile lookup: %d", w.Code)
 		}
 	})
 
 	t.Run("returns 404 when service returns error", func(t *testing.T) {
 		svc := &fakeProfileService{
 			getProfileFunc: func(ctx context.Context, userID string) (*model.ProfileResponse, error) {
-				return nil, errors.New("user not found")
+				return nil, domain.ErrNotFound
 			},
 		}
 
 		ctrl := NewProfileController(svc)
 		router := gin.New()
-		router.GET("/profile", ctrl.GetProfile)
+		router.GET("/profile", func(c *gin.Context) { c.Set("userID", "unknown"); ctrl.GetProfile(c) })
 
-		req, _ := http.NewRequest(http.MethodGet, "/profile?userId=unknown", nil)
+		req, _ := http.NewRequest(http.MethodGet, "/profile", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -190,9 +181,9 @@ func TestProfileController_DeleteAccount(t *testing.T) {
 
 		ctrl := NewProfileController(svc)
 		router := gin.New()
-		router.DELETE("/profile", ctrl.DeleteAccount)
+		router.DELETE("/profile", func(c *gin.Context) { c.Set("userID", "user_error"); ctrl.DeleteAccount(c) })
 
-		req, _ := http.NewRequest(http.MethodDelete, "/profile?userId=user_error", nil)
+		req, _ := http.NewRequest(http.MethodDelete, "/profile", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -602,4 +593,3 @@ func TestProfileController_UpdateProfilePhoto(t *testing.T) {
 		}
 	})
 }
-

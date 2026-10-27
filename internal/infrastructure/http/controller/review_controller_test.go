@@ -32,6 +32,7 @@ func (m *mockReviewRepo) CreateReviewInTx(ctx context.Context, review *domain.Re
 func setupReviewTestRouter(repo domain.ReviewRepository) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set("userID", "user-456") })
 
 	ratingUC := usecase.NewRatingUseCase(repo)
 	ctrl := infraCtrl.NewReviewController(ratingUC)
@@ -168,8 +169,8 @@ func TestReviewController_OrderNotCompleted(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400 for uncompleted order, got %d", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected status 409 for uncompleted order, got %d", w.Code)
 	}
 }
 
@@ -192,7 +193,20 @@ func TestReviewController_AlreadyReviewed(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400 for already reviewed, got %d", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected status 409 for already reviewed, got %d", w.Code)
+	}
+}
+
+func TestReviewCannotImpersonateAnotherReviewer(t *testing.T) {
+	called := false
+	repo := &mockReviewRepo{createFn: func(_ context.Context, _ *domain.Review) error { called = true; return nil }}
+	r := setupReviewTestRouter(repo)
+	req := httptest.NewRequest("POST", "/api/v1/reviews", bytes.NewBufferString(`{"order_id":"any","reviewer_id":"victim","rating":5}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 403 || called {
+		t.Fatalf("spoof accepted: code=%d repoCalled=%v", w.Code, called)
 	}
 }

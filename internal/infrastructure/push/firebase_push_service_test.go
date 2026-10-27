@@ -153,13 +153,13 @@ func TestFirebasePushService_SendNotification(t *testing.T) {
 		}
 	})
 
-	t.Run("handles nil app gracefully when no custom sender is provided", func(t *testing.T) {
+	t.Run("returns retriable error when Firebase is unavailable", func(t *testing.T) {
 		repo := &mockUserRepoForPush{token: "fcm_token_valid"}
 		svc := NewFirebasePushService(nil, repo)
 
 		err := svc.SendNotification(ctx, "usr_1", "Title", "Body", nil)
-		if err != nil {
-			t.Fatalf("expected nil error when app is nil, got: %v", err)
+		if err == nil {
+			t.Fatal("missing Firebase must remain pending in the durable outbox")
 		}
 	})
 

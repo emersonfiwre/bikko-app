@@ -1,317 +1,151 @@
 package postgres
 
 import (
-	"context"
-	"fmt"
-	"time"
-
 	"bikko-app/internal/domain"
-
+	"context"
+	"errors"
+	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"strings"
 )
 
-type bikkerRepository struct {
-	pool *pgxpool.Pool
-}
+type bikkerRepository struct{ pool *pgxpool.Pool }
 
 func NewBikkerRepository(pool *pgxpool.Pool) domain.BikkerRepository {
 	return &bikkerRepository{pool: pool}
 }
 
-func (r *bikkerRepository) GetByID(ctx context.Context, idOrSlug string) (*domain.BikkerProfileResponse, error) {
-	if r.pool == nil {
-		return nil, fmt.Errorf("banco de dados não inicializado")
-	}
+const bikkerSelect = `SELECT b.id::text,u.full_name,b.profession,COALESCE(u.profile_photo_url,''),COALESCE(b.rating,0)::text,COALESCE(b.total_reviews,0),COALESCE(b.experience_years,''),COALESCE(b.location_name,''),COALESCE(b.description,'') FROM bikkers b JOIN users u ON u.id=b.id `
 
-	query := `
-		SELECT 
-			b.id, 
-			u.full_name, 
-			b.profession, 
-			COALESCE(u.profile_photo_url, ''),
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.bikker_id = b.id), 0.0) AS rating,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.bikker_id = b.id), 0) AS total_reviews,
-			COALESCE(b.experience_years, ''), 
-			COALESCE(b.location_name, ''),
-			COALESCE(b.description, '')
-		FROM bikkers b
-		JOIN users u ON b.id = u.id
-		WHERE b.id::text = $1 OR LOWER(REPLACE(u.full_name, ' ', '_')) = LOWER($1) OR u.email LIKE $1 || '%'
-		LIMIT 1
-	`
-
-	var resp domain.BikkerProfileResponse
-	var ratingFloat float64
-
-	err := r.pool.QueryRow(ctx, query, idOrSlug).Scan(
-		&resp.ID,
-		&resp.Name,
-		&resp.Profession,
-		&resp.ProfilePhotoURL,
-		&ratingFloat,
-		&resp.TotalReviews,
-		&resp.ExperienceYears,
-		&resp.Location,
-		&resp.Description,
-	)
+func scanBikker(row pgx.Row) (*domain.BikkerProfileResponse, error) {
+	var p domain.BikkerProfileResponse
+	err := row.Scan(&p.ID, &p.Name, &p.Profession, &p.ProfilePhotoURL, &p.Rating, &p.TotalReviews, &p.ExperienceYears, &p.Location, &p.Description)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	p.OfferedServices = []domain.Service{}
+	p.Reviews = []domain.ServiceReviewItem{}
+	return &p, nil
+}
+func (r *bikkerRepository) getByID(ctx context.Context, id string, private bool) (*domain.BikkerProfileResponse, error) {
+	if r.pool == nil {
+		return nil, domain.ErrUnavailable
+	}
+	if !isValidUUID(id) {
 		return nil, domain.ErrNotFound
 	}
-	resp.Rating = fmt.Sprintf("%.1f", ratingFloat)
-
-	// 1. Fetch Offered Services
-	servicesQuery := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''),
-			COALESCE(s.thumbnail_url, ''), 
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			COALESCE(c.id::text, ''), COALESCE(c.name, ''), COALESCE(c.icon_url, '')
-		FROM services s
-		LEFT JOIN categories c ON s.category_id = c.id
-		WHERE s.bikker_id = $1 AND s.is_active = TRUE
-		ORDER BY s.created_at ASC
-	`
-	serviceRows, err := r.pool.Query(ctx, servicesQuery, resp.ID)
-	if err == nil {
-		defer serviceRows.Close()
-		var services []domain.Service
-		for serviceRows.Next() {
-			var s domain.Service
-			var catID, catName, catIcon string
-			if err := serviceRows.Scan(
-				&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description,
-				&s.ThumbnailURL, &s.ReviewsAverage, &s.TotalReviews,
-				&catID, &catName, &catIcon,
-			); err == nil {
-				if catID != "" {
-					s.Category = &domain.Category{
-						ID:      catID,
-						Name:    catName,
-						IconURL: catIcon,
-					}
-				}
-				s.IsActive = true
-				services = append(services, s)
-			}
-		}
-		resp.OfferedServices = services
+	query := bikkerSelect + ` WHERE b.id=$1::uuid AND u.deleted_at IS NULL AND u.is_bikker`
+	if !private {
+		query += ` AND b.is_active`
 	}
-	if resp.OfferedServices == nil {
-		resp.OfferedServices = []domain.Service{}
-	}
-
-	// 2. Fetch Reviews
-	reviewsQuery := `
-		SELECT 
-			COALESCE(u.full_name, 'Cliente'),
-			COALESCE(u.profile_photo_url, ''),
-			r.rating,
-			COALESCE(r.comment, ''),
-			COALESCE(r.like_count, 0),
-			COALESCE(r.dislike_count, 0),
-			r.created_at,
-			COALESCE(s.name, '') as service_tag,
-			COALESCE(b.profession, '') as provider_title
-		FROM reviews r
-		LEFT JOIN users u ON r.reviewer_id = u.id
-		LEFT JOIN services s ON r.service_id = s.id
-		LEFT JOIN bikkers b ON r.bikker_id = b.id
-		WHERE r.bikker_id = $1 AND r.reviewer_id != r.bikker_id AND r.reviewer_id != b.user_id
-		ORDER BY r.created_at DESC
-	`
-	reviewRows, err := r.pool.Query(ctx, reviewsQuery, resp.ID)
-	if err == nil {
-		defer reviewRows.Close()
-		var reviews []domain.ServiceReviewItem
-		for reviewRows.Next() {
-			var userName, userAvatar, comment, serviceTag, providerTitle string
-			var rating, like, dislike int
-			var createdAt time.Time
-			if err := reviewRows.Scan(
-				&userName, &userAvatar, &rating, &comment, &like, &dislike,
-				&createdAt, &serviceTag, &providerTitle,
-			); err == nil {
-				reviews = append(reviews, domain.ServiceReviewItem{
-					ReviewProfile: domain.ServiceReviewProfile{
-						Name:         userName,
-						ImageProfile: userAvatar,
-					},
-					Rating:        rating,
-					Comment:       comment,
-					Date:          createdAt.Format("02/01/2006"),
-					Like:          like,
-					Dislike:       dislike,
-					ServiceTag:    serviceTag,
-					ProviderTitle: providerTitle,
-				})
-			}
-		}
-		resp.Reviews = reviews
-	}
-	if resp.Reviews == nil {
-		resp.Reviews = []domain.ServiceReviewItem{}
-	}
-
-	return &resp, nil
-}
-
-func (r *bikkerRepository) GetNearBikkers(ctx context.Context, lat, lon float64, limit int) ([]domain.NearBikkerItem, error) {
-	if r.pool == nil {
-		return nil, fmt.Errorf("banco de dados não inicializado")
-	}
-
-	query := `
-		SELECT 
-			b.id, 
-			b.profession, 
-			u.full_name, 
-			COALESCE(u.profile_photo_url, ''),
-			ROUND((ST_Distance(b.location_geom, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000)::numeric, 1) as dist_km
-		FROM bikkers b
-		JOIN users u ON b.id = u.id
-		WHERE b.is_active = TRUE
-		ORDER BY b.location_geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography ASC
-		LIMIT $3
-	`
-
-	rows, err := r.pool.Query(ctx, query, lon, lat, limit)
+	profile, err := scanBikker(r.pool.QueryRow(ctx, query, id))
 	if err != nil {
-		return nil, fmt.Errorf("erro ao executar busca por perto de bikkers: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-
-	var items []domain.NearBikkerItem
-	for rows.Next() {
-		var id, profession, fullName, photo string
-		var distKm float64
-		if err := rows.Scan(&id, &profession, &fullName, &photo, &distKm); err != nil {
-			return nil, err
-		}
-
-		distStr := fmt.Sprintf("%.1f km de você", distKm)
-		if distKm <= 0.05 {
-			distStr = "0.9 km de você"
-		}
-
-		items = append(items, domain.NearBikkerItem{
-			ID:       id,
-			Title:    profession,
-			Subtitle: fullName,
-			ImageURL: photo,
-			Distance: distStr,
-		})
+	services := &serviceRepository{pool: r.pool}
+	if private {
+		profile.OfferedServices, err = services.GetServicesByBikkerID(ctx, id)
+	} else {
+		profile.OfferedServices, err = services.GetActiveServicesByBikkerID(ctx, id)
 	}
-
-	return items, nil
-}
-
-func (r *bikkerRepository) GetAll(ctx context.Context, limit int) ([]domain.BikkerProfileResponse, error) {
-	if r.pool == nil {
-		return nil, fmt.Errorf("banco de dados não inicializado")
+	if err != nil {
+		return nil, err
 	}
-
-	query := `
-		SELECT 
-			b.id, 
-			u.full_name, 
-			b.profession, 
-			COALESCE(u.profile_photo_url, ''),
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.bikker_id = b.id), 0.0) AS rating,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.bikker_id = b.id), 0) AS total_reviews,
-			COALESCE(b.experience_years, ''), 
-			COALESCE(b.location_name, ''),
-			COALESCE(b.description, '')
-		FROM bikkers b
-		JOIN users u ON b.id = u.id
-		WHERE b.is_active = TRUE
-		ORDER BY (SELECT COUNT(r.id) FROM reviews r WHERE r.bikker_id = b.id) DESC
-		LIMIT $1
-	`
-
-	rows, err := r.pool.Query(ctx, query, limit)
+	rows, err := r.pool.Query(ctx, `SELECT COALESCE(u.full_name,''),COALESCE(u.profile_photo_url,''),r.rating,COALESCE(r.comment,''),to_char(r.created_at,'DD/MM/YYYY'),COALESCE(s.name,''),b.profession FROM reviews r JOIN users u ON u.id=r.reviewer_id JOIN bikkers b ON b.id=r.bikker_id LEFT JOIN services s ON s.id=r.service_id WHERE r.bikker_id=$1::uuid ORDER BY r.created_at DESC,r.id LIMIT 100`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var list []domain.BikkerProfileResponse
 	for rows.Next() {
-		var resp domain.BikkerProfileResponse
-		var ratingFloat float64
-		if err := rows.Scan(
-			&resp.ID, &resp.Name, &resp.Profession, &resp.ProfilePhotoURL,
-			&ratingFloat, &resp.TotalReviews, &resp.ExperienceYears, &resp.Location, &resp.Description,
-		); err == nil {
-			resp.Rating = fmt.Sprintf("%.1f", ratingFloat)
-			resp.OfferedServices = []domain.Service{}
-			resp.Reviews = []domain.ServiceReviewItem{}
-			list = append(list, resp)
+		var review domain.ServiceReviewItem
+		if err = rows.Scan(&review.ReviewProfile.Name, &review.ReviewProfile.ImageProfile, &review.Rating, &review.Comment, &review.Date, &review.ServiceTag, &review.ProviderTitle); err != nil {
+			return nil, err
 		}
+		profile.Reviews = append(profile.Reviews, review)
 	}
-
-	return list, nil
+	return profile, rows.Err()
 }
-
-func (r *bikkerRepository) UpsertBikkerProfile(ctx context.Context, bikker *domain.Bikker) (*domain.BikkerProfileResponse, error) {
+func (r *bikkerRepository) GetByID(ctx context.Context, id string) (*domain.BikkerProfileResponse, error) {
+	return r.getByID(ctx, id, false)
+}
+func (r *bikkerRepository) GetNearBikkers(ctx context.Context, lat, lon float64, limit int) ([]domain.NearBikkerItem, error) {
 	if r.pool == nil {
-		return nil, fmt.Errorf("banco de dados não inicializado")
+		return nil, domain.ErrUnavailable
 	}
-	if bikker == nil || bikker.ID == "" {
-		return nil, fmt.Errorf("bikker id is required")
+	if !validCoordinates(&lat, &lon) || limit < 1 || limit > 100 {
+		return nil, domain.ErrInvalidInput
 	}
-
-	profession := bikker.Profession
-	if profession == "" {
-		profession = "Prestador de Serviços"
+	rows, err := r.pool.Query(ctx, `SELECT b.id::text,b.profession,u.full_name,COALESCE(u.profile_photo_url,''),ST_Distance(b.location_geom,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography)/1000 FROM bikkers b JOIN users u ON u.id=b.id WHERE b.is_active AND u.is_bikker AND u.deleted_at IS NULL AND ST_DWithin(b.location_geom,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,10000) ORDER BY b.location_geom <-> ST_SetSRID(ST_MakePoint($1,$2),4326)::geography LIMIT $3`, lon, lat, limit)
+	if err != nil {
+		return nil, err
 	}
-	locationName := bikker.LocationName
-	if locationName == "" {
-		locationName = "São Paulo, SP"
+	defer rows.Close()
+	items := []domain.NearBikkerItem{}
+	for rows.Next() {
+		var s domain.NearBikkerItem
+		var distance float64
+		if err = rows.Scan(&s.ID, &s.Title, &s.Subtitle, &s.ImageURL, &distance); err != nil {
+			return nil, err
+		}
+		s.Distance = fmt.Sprintf("%.1f km de você", distance)
+		items = append(items, s)
 	}
-	lat := bikker.Latitude
-	lon := bikker.Longitude
-	if lat == 0 {
-		lat = -23.55052
+	return items, rows.Err()
+}
+func (r *bikkerRepository) GetAll(ctx context.Context, limit int) ([]domain.BikkerProfileResponse, error) {
+	if r.pool == nil {
+		return nil, domain.ErrUnavailable
 	}
-	if lon == 0 {
-		lon = -46.63330
+	if limit < 1 || limit > 100 {
+		return nil, domain.ErrInvalidInput
 	}
-
-	_, _ = r.pool.Exec(ctx, `UPDATE users SET is_bikker = TRUE, updated_at = NOW() WHERE id::text = $1`, bikker.ID)
-
-	query := `
-		INSERT INTO bikkers (id, profession, experience_years, description, location_name, location_geom, is_active, updated_at)
-		VALUES ($1::uuid, $2, NULLIF($3, ''), NULLIF($4, ''), $5, ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, $8, NOW())
-		ON CONFLICT (id) DO UPDATE SET
-			profession = COALESCE(NULLIF(EXCLUDED.profession, ''), bikkers.profession),
-			experience_years = COALESCE(EXCLUDED.experience_years, bikkers.experience_years),
-			description = COALESCE(EXCLUDED.description, bikkers.description),
-			location_name = COALESCE(NULLIF(EXCLUDED.location_name, ''), bikkers.location_name),
-			location_geom = EXCLUDED.location_geom,
-			is_active = EXCLUDED.is_active,
-			updated_at = NOW()
-	`
-	if _, err := r.pool.Exec(ctx, query,
-		bikker.ID,
-		profession,
-		bikker.ExperienceYears,
-		bikker.Description,
-		locationName,
-		lon,
-		lat,
-		bikker.IsActive,
-	); err != nil {
-		return nil, fmt.Errorf("failed to upsert bikker profile: %w", err)
+	rows, err := r.pool.Query(ctx, bikkerSelect+` WHERE b.is_active AND u.is_bikker AND u.deleted_at IS NULL ORDER BY b.total_reviews DESC,b.id LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
 	}
-
-	if !bikker.IsActive {
-		_, _ = r.pool.Exec(ctx, `
-			UPDATE services
-			SET is_active = FALSE, updated_at = NOW()
-			WHERE bikker_id = $1::uuid
-		`, bikker.ID)
+	defer rows.Close()
+	items := []domain.BikkerProfileResponse{}
+	for rows.Next() {
+		p, e := scanBikker(rows)
+		if e != nil {
+			return nil, e
+		}
+		items = append(items, *p)
 	}
-
-	return r.GetByID(ctx, bikker.ID)
+	return items, rows.Err()
+}
+func (r *bikkerRepository) UpdateProviderProfile(ctx context.Context, id string, in domain.ProviderProfileUpdateRequest) (*domain.BikkerProfileResponse, error) {
+	if r.pool == nil {
+		return nil, domain.ErrUnavailable
+	}
+	if !isValidUUID(id) {
+		return nil, domain.ErrForbidden
+	}
+	if len([]rune(in.Profession)) > 100 || (in.Description != nil && len([]rune(*in.Description)) > 4000) {
+		return nil, domain.ErrInvalidInput
+	}
+	if (in.Latitude == nil) != (in.Longitude == nil) {
+		return nil, domain.ErrInvalidInput
+	}
+	if in.Latitude != nil && !validCoordinates(in.Latitude, in.Longitude) {
+		return nil, domain.ErrInvalidInput
+	}
+	tag, err := r.pool.Exec(ctx, `UPDATE bikkers b SET profession=COALESCE(NULLIF($2,''),profession),experience_years=COALESCE(NULLIF($3,''),experience_years),description=COALESCE($4::text,description),location_name=COALESCE(NULLIF($5,''),location_name),location_geom=CASE WHEN $6::double precision IS NULL THEN location_geom ELSE ST_SetSRID(ST_MakePoint($7::double precision,$6::double precision),4326)::geography END,is_active=COALESCE($8::boolean,is_active),updated_at=NOW() WHERE b.id=$1::uuid AND EXISTS(SELECT 1 FROM users u WHERE u.id=b.id AND u.deleted_at IS NULL AND u.is_bikker)`, id, strings.TrimSpace(in.Profession), strings.TrimSpace(in.ExperienceYears), in.Description, strings.TrimSpace(in.LocationName), in.Latitude, in.Longitude, in.IsActive)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, domain.ErrNotFound
+	}
+	return r.getByID(ctx, id, true)
+}
+func (r *bikkerRepository) UpsertBikkerProfile(ctx context.Context, b *domain.Bikker) (*domain.BikkerProfileResponse, error) {
+	if b == nil {
+		return nil, domain.ErrInvalidInput
+	}
+	return r.UpdateProviderProfile(ctx, b.ID, domain.ProviderProfileUpdateRequest{Profession: b.Profession, ExperienceYears: b.ExperienceYears, Description: &b.Description, LocationName: b.LocationName, Latitude: &b.Latitude, Longitude: &b.Longitude, IsActive: &b.IsActive})
 }

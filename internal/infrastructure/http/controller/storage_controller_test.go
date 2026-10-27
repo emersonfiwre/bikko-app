@@ -1,71 +1,76 @@
 package controller
 
 import (
-	"bytes"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
 	"bikko-app/config"
 	"bikko-app/internal/infrastructure/storage"
 	"bikko-app/internal/usecase"
-
+	"bytes"
+	"encoding/json"
 	"github.com/gin-gonic/gin"
+	"image"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"testing"
 )
 
-func TestStorageController_GenerateUploadURL_MockFallback(t *testing.T) {
+func TestStorageCannotSilentlyUseMock(t *testing.T) {
+	if _, err := storage.NewStorageService(&config.Config{Env: "production"}); err == nil {
+		t.Fatal("missing R2 must not be a successful fake upload")
+	}
+}
+func TestLocalStoragePersistsImageAndRejectsTampering(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-
-	cfg := &config.Config{
-		R2AccountID:  "mock_r2_account",
-		R2AccessKey:  "mock_r2_access_key",
-		R2SecretKey:  "mock_r2_secret_key",
-		R2BucketName: "bikko-media",
-		R2PublicURL:  "https://pub-bikko.r2.dev",
-	}
-
-	storageService, err := storage.NewStorageService(cfg)
+	svc, err := storage.NewStorageService(&config.Config{Env: "development", LocalStorage: true, LocalStorageDir: t.TempDir(), JWTSecret: "explicit-local-secret-longer-than-32-characters"})
 	if err != nil {
-		t.Fatalf("esperado nil error no NewStorageService mock, obteve: %v", err)
+		t.Fatal(err)
 	}
-
-	storageUC := usecase.NewStorageUseCase(storageService)
-	storageCtrl := NewStorageController(storageUC)
-
+	ctrl := NewStorageController(usecase.NewStorageUseCase(svc))
 	r := gin.New()
-	r.POST("/api/v1/storage/upload-url", storageCtrl.GenerateUploadURL)
-
-	reqBody := []byte(`{"filename": "foto_exemplo.png", "content_type": "image/png"}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", bytes.NewBuffer(reqBody))
+	r.POST("/api/v1/storage/upload-url", func(c *gin.Context) {
+		c.Set("userID", "11111111-1111-1111-1111-111111111111")
+		ctrl.GenerateUploadURL(c)
+	})
+	r.PUT("/api/v1/local-storage/*key", ctrl.LocalObject)
+	r.GET("/api/v1/local-storage/*key", ctrl.LocalObject)
+	var imageBytes bytes.Buffer
+	if err = png.Encode(&imageBytes, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"filename": "photo.png", "content_type": "image/png", "size_bytes": imageBytes.Len()})
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/api/v1/storage/upload-url", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status code esperado %d, obteve %d: %s", http.StatusOK, w.Code, w.Body.String())
+	if w.Code != 200 {
+		t.Fatalf("presign %d: %s", w.Code, w.Body.String())
 	}
-
-	var resp storage.PreSignedURLResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("falha ao deserializar resposta: %v", err)
+	var signed storage.PreSignedURLResponse
+	if err = json.Unmarshal(w.Body.Bytes(), &signed); err != nil {
+		t.Fatal(err)
 	}
-
-	if resp.UploadURL == "" {
-		t.Errorf("upload_url não deveria ser vazio")
+	req = httptest.NewRequest(http.MethodPut, signed.UploadURL, bytes.NewReader(imageBytes.Bytes()))
+	req.Header.Set("Content-Type", "image/png")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 204 {
+		t.Fatalf("upload %d: %s", w.Code, w.Body.String())
 	}
-	if resp.Key == "" {
-		t.Errorf("key não deveria ser vazio")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, signed.PublicURL, nil))
+	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), imageBytes.Bytes()) {
+		t.Fatalf("image was not persisted, status %d", w.Code)
 	}
-	if !strings.HasSuffix(resp.Key, ".png") {
-		t.Errorf("key deveria ter extensão .png, obteve: %s", resp.Key)
-	}
-	if resp.PublicURL == "" {
-		t.Errorf("public_url não deveria ser vazio")
-	}
-	if !strings.HasPrefix(resp.PublicURL, "https://pub-bikko.r2.dev/") {
-		t.Errorf("public_url deveria começar com base URL, obteve: %s", resp.PublicURL)
+	u, _ := url.Parse(signed.UploadURL)
+	q := u.Query()
+	q.Set("signature", "tampered")
+	u.RawQuery = q.Encode()
+	req = httptest.NewRequest(http.MethodPut, u.String(), bytes.NewReader(imageBytes.Bytes()))
+	req.Header.Set("Content-Type", "image/png")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 403 {
+		t.Fatalf("tampered capability accepted: %d", w.Code)
 	}
 }

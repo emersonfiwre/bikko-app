@@ -39,7 +39,9 @@ func (uc *HomeUseCase) GetHomeFeed(ctx context.Context, lat, lon float64, hasLoc
 		if err != nil {
 			return nil, fmt.Errorf("home_usecase: failed to fetch categories: %w", err)
 		}
-		_ = uc.redisService.SetCategories(ctx, categories)
+		if cacheErr := uc.redisService.SetCategories(ctx, categories); cacheErr != nil {
+			slog.Warn("category cache write failed", slog.Any("error", cacheErr))
+		}
 	}
 
 	// 2. Near Bikkers: ONLY when location permission was granted and coordinates provided!
@@ -136,7 +138,9 @@ func (uc *HomeUseCase) GetCategories(ctx context.Context) ([]domain.Category, er
 	if err != nil {
 		return nil, fmt.Errorf("home_usecase: failed to get categories: %w", err)
 	}
-	_ = uc.redisService.SetCategories(ctx, categories)
+	if cacheErr := uc.redisService.SetCategories(ctx, categories); cacheErr != nil {
+		slog.Warn("category cache write failed", slog.Any("error", cacheErr))
+	}
 	return categories, nil
 }
 

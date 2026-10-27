@@ -1,570 +1,275 @@
 package postgres
 
 import (
-	"context"
-	"fmt"
-	"time"
-
 	"bikko-app/internal/domain"
-
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"strings"
+	"time"
 )
 
-type serviceRepository struct {
-	pool *pgxpool.Pool
-}
+type serviceRepository struct{ pool *pgxpool.Pool }
 
 func NewServiceRepository(pool *pgxpool.Pool) domain.ServiceRepository {
 	return &serviceRepository{pool: pool}
 }
 
-func (r *serviceRepository) GetByID(ctx context.Context, id string) (*domain.Service, error) {
-	if r.pool == nil {
-		return nil, domain.ErrNotFound
-	}
+const serviceSelect = `SELECT s.id::text,s.bikker_id::text,s.category_id::text,s.name,COALESCE(s.description,''),COALESCE(s.thumbnail_url,''),COALESCE(ST_Y(s.location_geom::geometry),0),COALESCE(ST_X(s.location_geom::geometry),0),COALESCE(s.reviews_average,0),COALESCE(s.total_reviews,0),s.is_active,s.created_at,s.updated_at,c.name,COALESCE(c.icon_url,''),COALESCE(c.description,''),c.is_active,u.full_name,COALESCE(b.profession,''),COALESCE(u.profile_photo_url,''),COALESCE((SELECT jsonb_agg(sp.photo_url ORDER BY sp.display_order,sp.id) FROM service_photos sp WHERE sp.service_id=s.id),'[]'::jsonb) FROM services s JOIN categories c ON c.id=s.category_id JOIN users u ON u.id=s.bikker_id JOIN bikkers b ON b.id=s.bikker_id `
+const serviceVisible = ` s.deleted_at IS NULL AND u.deleted_at IS NULL `
 
-	query := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
-			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			s.is_active, s.created_at, s.updated_at,
-			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active,
-			COALESCE(u.full_name, ''), COALESCE(b.profession, ''), COALESCE(u.profile_photo_url, '')
-		FROM services s
-		INNER JOIN categories c ON c.id = s.category_id
-		LEFT JOIN users u ON u.id = s.bikker_id
-		LEFT JOIN bikkers b ON b.id = s.bikker_id
-		WHERE s.id::text = $1 OR s.id::text LIKE $1 || '%'
-		LIMIT 1
-	`
+func scanService(row pgx.Row) (*domain.Service, error) {
 	var s domain.Service
 	var c domain.Category
-	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
-		&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-		&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
-		&s.ProviderName, &s.ProviderTitle, &s.ProviderPhotoURL,
-	)
+	var photos []byte
+	err := row.Scan(&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL, &s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt, &c.Name, &c.IconURL, &c.Description, &c.IsActive, &s.ProviderName, &s.ProviderTitle, &s.ProviderPhotoURL, &photos)
 	if err != nil {
-		return nil, domain.ErrNotFound
-	}
-	s.Category = &c
-
-	// Load photos
-	photosQuery := `SELECT photo_url FROM service_photos WHERE service_id = $1 ORDER BY display_order ASC`
-	photoRows, err := r.pool.Query(ctx, photosQuery, s.ID)
-	if err == nil {
-		defer photoRows.Close()
-		var photos []string
-		for photoRows.Next() {
-			var photoURL string
-			if err := photoRows.Scan(&photoURL); err == nil {
-				photos = append(photos, photoURL)
-			}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrNotFound
 		}
-		s.Photos = photos
+		return nil, err
+	}
+	c.ID = s.CategoryID
+	s.Category = &c
+	if err = json.Unmarshal(photos, &s.Photos); err != nil {
+		return nil, err
 	}
 	if s.Photos == nil {
 		s.Photos = []string{}
 	}
-
-	// Load reviews
-	reviewsQuery := `
-		SELECT 
-			COALESCE(u.full_name, 'Cliente'),
-			COALESCE(u.profile_photo_url, ''),
-			r.rating,
-			COALESCE(r.comment, ''),
-			COALESCE(r.like_count, 0),
-			COALESCE(r.dislike_count, 0),
-			r.created_at
-		FROM reviews r
-		LEFT JOIN users u ON r.reviewer_id = u.id
-		WHERE r.service_id = $1 
-		  AND r.reviewer_id != r.bikker_id 
-		  AND r.reviewer_id NOT IN (SELECT b.user_id FROM bikkers b WHERE b.id = r.bikker_id)
-		ORDER BY r.created_at DESC
-	`
-	reviewRows, err := r.pool.Query(ctx, reviewsQuery, s.ID)
-	if err == nil {
-		defer reviewRows.Close()
-		var reviews []domain.ServiceReviewItem
-		for reviewRows.Next() {
-			var userName, userAvatar, comment string
-			var rating, like, dislike int
-			var createdAt time.Time
-			if err := reviewRows.Scan(&userName, &userAvatar, &rating, &comment, &like, &dislike, &createdAt); err == nil {
-				dateStr := createdAt.Format("02/01/2006")
-				reviews = append(reviews, domain.ServiceReviewItem{
-					ReviewProfile: domain.ServiceReviewProfile{
-						Name:         userName,
-						ImageProfile: userAvatar,
-					},
-					Rating:  rating,
-					Comment: comment,
-					Date:    dateStr,
-					Like:    like,
-					Dislike: dislike,
-				})
-			}
-		}
-		s.Reviews = reviews
-	}
-	if s.Reviews == nil {
-		s.Reviews = []domain.ServiceReviewItem{}
-	}
-
+	s.Reviews = []domain.ServiceReviewItem{}
 	return &s, nil
 }
-
+func (r *serviceRepository) getByID(ctx context.Context, id string, private bool) (*domain.Service, error) {
+	if r.pool == nil {
+		return nil, domain.ErrUnavailable
+	}
+	if !isValidUUID(id) {
+		return nil, domain.ErrNotFound
+	}
+	where := ` WHERE s.id=$1::uuid AND ` + serviceVisible
+	if !private {
+		where += ` AND s.is_active AND b.is_active`
+	}
+	s, err := scanService(r.pool.QueryRow(ctx, serviceSelect+where, id))
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, `SELECT COALESCE(u.full_name,''),COALESCE(u.profile_photo_url,''),r.rating,COALESCE(r.comment,''),r.created_at FROM reviews r JOIN users u ON u.id=r.reviewer_id WHERE r.service_id=$1::uuid ORDER BY r.created_at DESC,r.id LIMIT 100`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item domain.ServiceReviewItem
+		var created time.Time
+		if err = rows.Scan(&item.ReviewProfile.Name, &item.ReviewProfile.ImageProfile, &item.Rating, &item.Comment, &created); err != nil {
+			return nil, err
+		}
+		item.Date = created.Format("02/01/2006")
+		s.Reviews = append(s.Reviews, item)
+	}
+	return s, rows.Err()
+}
+func (r *serviceRepository) GetByID(ctx context.Context, id string) (*domain.Service, error) {
+	return r.getByID(ctx, id, false)
+}
 func (r *serviceRepository) GetServiceByID(ctx context.Context, id string) (*domain.Service, error) {
 	return r.GetByID(ctx, id)
 }
-
-func (r *serviceRepository) GetServicesNear(ctx context.Context, lat, lon float64, radiusMeters float64, limit int) ([]domain.Service, error) {
-	query := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
-			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			s.is_active, s.created_at, s.updated_at,
-			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active
-		FROM services s
-		INNER JOIN categories c ON c.id = s.category_id
-		WHERE s.is_active = TRUE
-		  AND ST_DWithin(
-			s.location_geom,
-			ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-			$3
-		  )
-		ORDER BY s.location_geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
-		LIMIT $4
-	`
-	rows, err := r.pool.Query(ctx, query, lon, lat, radiusMeters, limit)
+func (r *serviceRepository) list(ctx context.Context, where string, args ...any) ([]domain.Service, error) {
+	if r.pool == nil {
+		return nil, domain.ErrUnavailable
+	}
+	rows, err := r.pool.Query(ctx, serviceSelect+` WHERE `+serviceVisible+` AND `+where, args...)
 	if err != nil {
-		return nil, fmt.Errorf("erro ao buscar serviços por geolocalização: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
-
-	var services []domain.Service
+	out := []domain.Service{}
 	for rows.Next() {
-		var s domain.Service
-		var c domain.Category
-		err := rows.Scan(
-			&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
-			&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-			&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
-		)
-		if err != nil {
-			return nil, err
+		s, e := scanService(rows)
+		if e != nil {
+			return nil, e
 		}
-		s.Category = &c
-		services = append(services, s)
+		out = append(out, *s)
 	}
-	return services, nil
+	return out, rows.Err()
 }
-
+func (r *serviceRepository) GetServicesNear(ctx context.Context, lat, lon, radius float64, limit int) ([]domain.Service, error) {
+	if !validCoordinates(&lat, &lon) || radius <= 0 || radius > 100000 || limit < 1 || limit > 100 {
+		return nil, domain.ErrInvalidInput
+	}
+	return r.list(ctx, `s.is_active AND b.is_active AND ST_DWithin(s.location_geom,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3) ORDER BY s.location_geom <-> ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,s.id LIMIT $4`, lon, lat, radius, limit)
+}
 func (r *serviceRepository) GetFeaturedAdviceServices(ctx context.Context, limit int) ([]domain.Service, error) {
-	query := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
-			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			s.is_active, s.created_at, s.updated_at,
-			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active
-		FROM services s
-		INNER JOIN categories c ON c.id = s.category_id
-		WHERE s.is_active = TRUE
-		ORDER BY (SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id) DESC, s.created_at DESC
-		LIMIT $1
-	`
-	rows, err := r.pool.Query(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao buscar serviços recomendados: %w", err)
+	if limit < 1 || limit > 100 {
+		return nil, domain.ErrInvalidInput
 	}
-	defer rows.Close()
-
-	var services []domain.Service
-	for rows.Next() {
-		var s domain.Service
-		var c domain.Category
-		err := rows.Scan(
-			&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
-			&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-			&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
-		)
-		if err != nil {
-			return nil, err
-		}
-		s.Category = &c
-		services = append(services, s)
-	}
-	return services, nil
+	return r.list(ctx, `s.is_active AND b.is_active ORDER BY s.total_reviews DESC,s.created_at DESC LIMIT $1`, limit)
 }
-
-func (r *serviceRepository) GetActiveServicesByBikkerID(ctx context.Context, bikkerID string) ([]domain.Service, error) {
-	query := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
-			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			s.is_active, s.created_at, s.updated_at,
-			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active
-		FROM services s
-		INNER JOIN categories c ON c.id = s.category_id
-		WHERE (s.bikker_id::text = $1 OR s.bikker_id::text LIKE $1 || '%') AND s.is_active = TRUE
-		ORDER BY s.created_at ASC
-	`
-	rows, err := r.pool.Query(ctx, query, bikkerID)
-	if err != nil {
-		return nil, err
+func (r *serviceRepository) GetActiveServicesByBikkerID(ctx context.Context, id string) ([]domain.Service, error) {
+	if !isValidUUID(id) {
+		return nil, domain.ErrInvalidInput
 	}
-	defer rows.Close()
-
-	var services []domain.Service
-	for rows.Next() {
-		var s domain.Service
-		var c domain.Category
-		err := rows.Scan(
-			&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
-			&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-			&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
-		)
-		if err != nil {
-			return nil, err
-		}
-		s.Category = &c
-		services = append(services, s)
-	}
-	return services, nil
+	return r.list(ctx, `s.bikker_id=$1::uuid AND s.is_active AND b.is_active ORDER BY s.created_at DESC LIMIT 100`, id)
 }
-
-func (r *serviceRepository) GetServicesByBikkerID(ctx context.Context, bikkerID string) ([]domain.Service, error) {
-	query := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
-			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			s.is_active, s.created_at, s.updated_at,
-			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active
-		FROM services s
-		INNER JOIN categories c ON c.id = s.category_id
-		WHERE (s.bikker_id::text = $1 OR s.bikker_id::text LIKE $1 || '%')
-		ORDER BY s.created_at DESC
-	`
-	rows, err := r.pool.Query(ctx, query, bikkerID)
-	if err != nil {
-		return nil, err
+func (r *serviceRepository) GetServicesByBikkerID(ctx context.Context, id string) ([]domain.Service, error) {
+	if !isValidUUID(id) {
+		return nil, domain.ErrInvalidInput
 	}
-	defer rows.Close()
-
-	var services []domain.Service
-	for rows.Next() {
-		var s domain.Service
-		var c domain.Category
-		err := rows.Scan(
-			&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
-			&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-			&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
-		)
-		if err != nil {
-			return nil, err
-		}
-		s.Category = &c
-		services = append(services, s)
-	}
-
-	for i := range services {
-		photosQuery := `SELECT photo_url FROM service_photos WHERE service_id = $1 ORDER BY display_order ASC`
-		photoRows, err := r.pool.Query(ctx, photosQuery, services[i].ID)
-		if err == nil {
-			var photos []string
-			for photoRows.Next() {
-				var photoURL string
-				if err := photoRows.Scan(&photoURL); err == nil {
-					photos = append(photos, photoURL)
-				}
-			}
-			photoRows.Close()
-			services[i].Photos = photos
-		}
-		if len(services[i].Photos) == 0 && services[i].ThumbnailURL != "" {
-			services[i].Photos = []string{services[i].ThumbnailURL}
-		}
-	}
-
-	return services, nil
+	return r.list(ctx, `s.bikker_id=$1::uuid ORDER BY s.created_at DESC LIMIT 100`, id)
 }
-
-func (r *serviceRepository) GetServicesByCategoryID(ctx context.Context, categoryID string) ([]domain.Service, error) {
-	query := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
-			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			s.is_active, s.created_at, s.updated_at,
-			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active
-		FROM services s
-		INNER JOIN categories c ON c.id = s.category_id
-		WHERE (s.category_id::text = $1 OR s.category_id::text LIKE $1 || '%' OR c.id::text LIKE $1 || '%') AND s.is_active = TRUE
-		ORDER BY s.created_at ASC
-	`
-	rows, err := r.pool.Query(ctx, query, categoryID)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao buscar serviços por categoria: %w", err)
+func (r *serviceRepository) GetServicesByCategoryID(ctx context.Context, id string) ([]domain.Service, error) {
+	if !isValidUUID(id) {
+		return nil, domain.ErrInvalidInput
 	}
-	defer rows.Close()
-
-	var services []domain.Service
-	for rows.Next() {
-		var s domain.Service
-		var c domain.Category
-		err := rows.Scan(
-			&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
-			&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-			&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
-		)
-		if err != nil {
-			return nil, err
-		}
-		s.Category = &c
-		services = append(services, s)
-	}
-	return services, nil
+	return r.list(ctx, `s.category_id=$1::uuid AND s.is_active AND b.is_active ORDER BY s.created_at DESC LIMIT 100`, id)
 }
-
 func (r *serviceRepository) SearchServices(ctx context.Context, q string) ([]domain.Service, error) {
-	query := `
-		SELECT 
-			s.id, s.bikker_id, s.category_id, s.name, COALESCE(s.description, ''), COALESCE(s.thumbnail_url, ''),
-			ST_Y(s.location_geom::geometry) AS lat, ST_X(s.location_geom::geometry) AS lon,
-			COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 1) FROM reviews r WHERE r.service_id = s.id), 0.0) AS reviews_average,
-			COALESCE((SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id), 0) AS total_reviews,
-			s.is_active, s.created_at, s.updated_at,
-			c.id, c.name, COALESCE(c.icon_url, ''), COALESCE(c.description, ''), c.is_active
-		FROM services s
-		INNER JOIN categories c ON c.id = s.category_id
-		WHERE s.is_active = TRUE
-		  AND (s.name ILIKE '%' || $1 || '%' OR s.description ILIKE '%' || $1 || '%')
-		ORDER BY (SELECT COUNT(r.id) FROM reviews r WHERE r.service_id = s.id) DESC, s.created_at DESC
-		LIMIT 20
-	`
-	rows, err := r.pool.Query(ctx, query, q)
-	if err != nil {
-		return nil, fmt.Errorf("erro ao pesquisar serviços: %w", err)
+	q = strings.TrimSpace(q)
+	if q == "" || len([]rune(q)) > 100 {
+		return []domain.Service{}, nil
 	}
-	defer rows.Close()
-
-	var services []domain.Service
-	for rows.Next() {
-		var s domain.Service
-		var c domain.Category
-		err := rows.Scan(
-			&s.ID, &s.BikkerID, &s.CategoryID, &s.Name, &s.Description, &s.ThumbnailURL,
-			&s.Latitude, &s.Longitude, &s.ReviewsAverage, &s.TotalReviews, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-			&c.ID, &c.Name, &c.IconURL, &c.Description, &c.IsActive,
-		)
+	return r.list(ctx, `s.is_active AND b.is_active AND (s.name ILIKE '%'||$1||'%' OR s.description ILIKE '%'||$1||'%') ORDER BY s.total_reviews DESC,s.created_at DESC LIMIT 50`, q)
+}
+func categoryID(ctx context.Context, q contractQuerier, input string) (string, error) {
+	if strings.TrimSpace(input) == "" {
+		return "", domain.ErrInvalidInput
+	}
+	var id string
+	err := q.QueryRow(ctx, `SELECT id::text FROM categories WHERE (id::text=$1 OR lower(name)=lower($1)) AND is_active`, strings.TrimSpace(input)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", domain.ErrNotFound
+	}
+	return id, err
+}
+func validateService(s *domain.Service) error {
+	if s == nil || !isValidUUID(s.BikkerID) || strings.TrimSpace(s.Name) == "" || len([]rune(s.Name)) > 255 || len([]rune(s.Description)) > 4000 || len(s.Photos) > 10 {
+		return domain.ErrInvalidInput
+	}
+	return nil
+}
+func storePhotos(ctx context.Context, tx pgx.Tx, id string, photos []string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM service_photos WHERE service_id=$1::uuid`, id); err != nil {
+		return err
+	}
+	for i, url := range photos {
+		if strings.TrimSpace(url) == "" {
+			return domain.ErrInvalidInput
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO service_photos(service_id,photo_url,display_order) VALUES($1::uuid,$2,$3)`, id, url, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (r *serviceRepository) CreateService(ctx context.Context, s *domain.Service) (*domain.Service, error) {
+	if r.pool == nil {
+		return nil, domain.ErrUnavailable
+	}
+	if err := validateService(s); err != nil {
+		return nil, err
+	}
+	if !validCoordinates(&s.Latitude, &s.Longitude) {
+		return nil, domain.ErrInvalidInput
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bikkers b JOIN users u ON u.id=b.id WHERE b.id=$1::uuid AND (NOT $2::boolean OR b.is_active) AND u.deleted_at IS NULL AND u.is_bikker)`, s.BikkerID, s.IsActive).Scan(&active); err != nil {
+		return nil, err
+	}
+	if !active {
+		return nil, domain.ErrForbidden
+	}
+	category, err := categoryID(ctx, tx, s.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+	thumbnail := s.ThumbnailURL
+	if thumbnail == "" && len(s.Photos) > 0 {
+		thumbnail = s.Photos[0]
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO services(bikker_id,category_id,name,description,thumbnail_url,location_geom,is_active) VALUES($1::uuid,$2::uuid,$3,$4,$5,ST_SetSRID(ST_MakePoint($6,$7),4326)::geography,$8) RETURNING id::text`, s.BikkerID, category, strings.TrimSpace(s.Name), s.Description, thumbnail, s.Longitude, s.Latitude, s.IsActive).Scan(&s.ID)
+	if err != nil {
+		return nil, fmt.Errorf("create service: %w", err)
+	}
+	photos := s.Photos
+	if len(photos) == 0 && thumbnail != "" {
+		photos = []string{thumbnail}
+	}
+	if err = storePhotos(ctx, tx, s.ID, photos); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return r.getByID(ctx, s.ID, true)
+}
+func (r *serviceRepository) UpdateService(ctx context.Context, s *domain.Service) (*domain.Service, error) {
+	if r.pool == nil {
+		return nil, domain.ErrUnavailable
+	}
+	if s == nil || !isValidUUID(s.ID) || !isValidUUID(s.BikkerID) || len(s.Photos) > 10 {
+		return nil, domain.ErrInvalidInput
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var existing string
+	if err = tx.QueryRow(ctx, `SELECT s.id::text FROM services s JOIN users u ON u.id=s.bikker_id WHERE s.id=$1::uuid AND s.bikker_id=$2::uuid AND s.deleted_at IS NULL AND u.deleted_at IS NULL AND u.is_bikker FOR UPDATE OF s`, s.ID, s.BikkerID).Scan(&existing); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	category := ""
+	if s.CategoryID != "" {
+		category, err = categoryID(ctx, tx, s.CategoryID)
 		if err != nil {
 			return nil, err
 		}
-		s.Category = &c
-		services = append(services, s)
 	}
-	return services, nil
-}
-
-func (r *serviceRepository) resolveCategoryID(ctx context.Context, catIDOrName string) string {
-	defaultCategory := "00000000-0000-0000-0000-000000000099"
-	if r.pool == nil {
-		return defaultCategory
+	thumbnail := s.ThumbnailURL
+	if thumbnail == "" && len(s.Photos) > 0 {
+		thumbnail = s.Photos[0]
 	}
-	var resolved string
-	if catIDOrName != "" {
-		err := r.pool.QueryRow(ctx, `
-			SELECT id::text FROM categories
-			WHERE id::text = $1 OR name ILIKE '%' || $1 || '%'
-			ORDER BY is_active DESC
-			LIMIT 1
-		`, catIDOrName).Scan(&resolved)
-		if err == nil && resolved != "" {
-			return resolved
-		}
+	if len([]rune(s.Name)) > 255 || len([]rune(s.Description)) > 4000 {
+		return nil, domain.ErrInvalidInput
 	}
-	err := r.pool.QueryRow(ctx, `SELECT id::text FROM categories WHERE is_active = TRUE ORDER BY created_at ASC LIMIT 1`).Scan(&resolved)
-	if err == nil && resolved != "" {
-		return resolved
-	}
-	return defaultCategory
-}
-
-func (r *serviceRepository) CreateService(ctx context.Context, service *domain.Service) (*domain.Service, error) {
-	if r.pool == nil {
-		return nil, fmt.Errorf("banco de dados não inicializado")
-	}
-	if service == nil || service.BikkerID == "" || service.Name == "" {
-		return nil, fmt.Errorf("bikker_id and service name are required")
-	}
-
-	catInput := service.CategoryID
-	if catInput == "" && service.Category != nil {
-		if service.Category.ID != "" {
-			catInput = service.Category.ID
-		} else {
-			catInput = service.Category.Name
-		}
-	}
-	categoryID := r.resolveCategoryID(ctx, catInput)
-
-	lat := service.Latitude
-	lon := service.Longitude
-	if lat == 0 {
-		lat = -23.55052
-	}
-	if lon == 0 {
-		lon = -46.63330
-	}
-
-	thumb := service.ThumbnailURL
-	if thumb == "" && len(service.Photos) > 0 {
-		thumb = service.Photos[0]
-	}
-
-	// Ensure Bikker row exists before inserting service
-	_, _ = r.pool.Exec(ctx, `
-		INSERT INTO bikkers (id, profession, location_name, location_geom, is_active)
-		VALUES ($1::uuid, 'Prestador de Serviços', 'São Paulo, SP', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, TRUE)
-		ON CONFLICT (id) DO NOTHING
-	`, service.BikkerID, lon, lat)
-
-	query := `
-		INSERT INTO services (bikker_id, category_id, name, description, thumbnail_url, location_geom, is_active)
-		VALUES ($1::uuid, $2::uuid, $3, $4, NULLIF($5, ''), ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography, $8)
-		RETURNING id::text, created_at, updated_at
-	`
-	err := r.pool.QueryRow(ctx, query,
-		service.BikkerID,
-		categoryID,
-		service.Name,
-		service.Description,
-		thumb,
-		lon,
-		lat,
-		service.IsActive,
-	).Scan(&service.ID, &service.CreatedAt, &service.UpdatedAt)
+	_, err = tx.Exec(ctx, `UPDATE services SET name=COALESCE(NULLIF($2,''),name),description=$3,thumbnail_url=COALESCE(NULLIF($4,''),thumbnail_url),category_id=COALESCE(NULLIF($5,'')::uuid,category_id),is_active=$6,updated_at=NOW() WHERE id=$1::uuid`, s.ID, s.Name, s.Description, thumbnail, category, s.IsActive)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create service: %w", err)
+		return nil, err
 	}
-
-	service.CategoryID = categoryID
-	service.ThumbnailURL = thumb
-
-	photos := service.Photos
-	if len(photos) == 0 && thumb != "" {
-		photos = []string{thumb}
-	}
-	for idx, photoURL := range photos {
-		if photoURL == "" {
-			continue
+	if s.Photos != nil {
+		if err = storePhotos(ctx, tx, s.ID, s.Photos); err != nil {
+			return nil, err
 		}
-		_, _ = r.pool.Exec(ctx, `
-			INSERT INTO service_photos (service_id, photo_url, display_order)
-			VALUES ($1::uuid, $2, $3)
-		`, service.ID, photoURL, idx+1)
 	}
-
-	if full, err := r.GetByID(ctx, service.ID); err == nil && full != nil {
-		return full, nil
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
 	}
-	return service, nil
+	return r.getByID(ctx, s.ID, true)
 }
-
-func (r *serviceRepository) UpdateService(ctx context.Context, service *domain.Service) (*domain.Service, error) {
+func (r *serviceRepository) DeleteService(ctx context.Context, id, actor string) error {
 	if r.pool == nil {
-		return nil, fmt.Errorf("banco de dados não inicializado")
+		return domain.ErrUnavailable
 	}
-	if service == nil || service.ID == "" {
-		return nil, fmt.Errorf("service id is required")
+	if !isValidUUID(id) || !isValidUUID(actor) {
+		return domain.ErrNotFound
 	}
-
-	catInput := service.CategoryID
-	if catInput == "" && service.Category != nil {
-		if service.Category.ID != "" {
-			catInput = service.Category.ID
-		} else {
-			catInput = service.Category.Name
-		}
-	}
-	categoryID := ""
-	if catInput != "" {
-		categoryID = r.resolveCategoryID(ctx, catInput)
-	}
-
-	thumb := service.ThumbnailURL
-	if thumb == "" && len(service.Photos) > 0 {
-		thumb = service.Photos[0]
-	}
-
-	query := `
-		UPDATE services
-		SET name = COALESCE(NULLIF($2, ''), name),
-		    description = COALESCE(NULLIF($3, ''), description),
-		    thumbnail_url = COALESCE(NULLIF($4, ''), thumbnail_url),
-		    category_id = CASE WHEN $5 <> '' THEN $5::uuid ELSE category_id END,
-		    is_active = $7,
-		    updated_at = NOW()
-		WHERE id::text = $1 AND ($6 = '' OR bikker_id::text = $6)
-	`
-	tag, err := r.pool.Exec(ctx, query,
-		service.ID,
-		service.Name,
-		service.Description,
-		thumb,
-		categoryID,
-		service.BikkerID,
-		service.IsActive,
-	)
+	tag, err := r.pool.Exec(ctx, `UPDATE services s SET deleted_at=COALESCE(s.deleted_at,NOW()),is_active=FALSE,updated_at=NOW() WHERE s.id=$1::uuid AND s.bikker_id=$2::uuid AND EXISTS(SELECT 1 FROM users u WHERE u.id=s.bikker_id AND u.deleted_at IS NULL AND u.is_bikker)`, id, actor)
 	if err != nil {
-		return nil, fmt.Errorf("failed to update service: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, domain.ErrNotFound
-	}
-
-	if len(service.Photos) > 0 {
-		_, _ = r.pool.Exec(ctx, `DELETE FROM service_photos WHERE service_id::text = $1`, service.ID)
-		for idx, photoURL := range service.Photos {
-			if photoURL == "" {
-				continue
-			}
-			_, _ = r.pool.Exec(ctx, `
-				INSERT INTO service_photos (service_id, photo_url, display_order)
-				VALUES ($1::uuid, $2, $3)
-			`, service.ID, photoURL, idx+1)
-		}
-	}
-
-	return r.GetByID(ctx, service.ID)
-}
-
-func (r *serviceRepository) DeleteService(ctx context.Context, serviceID, bikkerID string) error {
-	if r.pool == nil {
-		return fmt.Errorf("banco de dados não inicializado")
-	}
-	_, _ = r.pool.Exec(ctx, `DELETE FROM service_photos WHERE service_id::text = $1`, serviceID)
-	query := `
-		DELETE FROM services
-		WHERE id::text = $1 AND ($2 = '' OR bikker_id::text = $2)
-	`
-	tag, err := r.pool.Exec(ctx, query, serviceID, bikkerID)
-	if err != nil {
-		return fmt.Errorf("failed to delete service: %w", err)
+		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound

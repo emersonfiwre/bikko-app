@@ -17,6 +17,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4-alpine
+        env:
+          POSTGRES_USER: bikko
+          POSTGRES_PASSWORD: integration-only
+          POSTGRES_DB: bikko_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bikko -d bikko_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://bikko:integration-only@127.0.0.1:5432/bikko_test?sslmode=disable
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -34,7 +51,10 @@ jobs:
       - name: Verify Module Integrity
         run: go mod verify
 
-      - name: Run Unit Tests
+      - name: Build all API and migration entrypoints
+        run: go build ./...
+
+      - name: Run Unit and PostGIS Integration Tests
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Upload Test Coverage

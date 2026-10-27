@@ -1,57 +1,42 @@
 package usecase
 
 import (
+	"bikko-app/internal/domain"
+	"bikko-app/internal/infrastructure/storage"
 	"context"
 	"fmt"
-	"path/filepath"
-	"strings"
-	"time"
-
-	"bikko-app/internal/infrastructure/storage"
-
 	"github.com/google/uuid"
 )
 
-type StorageUseCase struct {
-	storageService *storage.StorageService
-}
+type StorageUseCase struct{ storageService *storage.StorageService }
 
-func NewStorageUseCase(storageService *storage.StorageService) *StorageUseCase {
-	return &StorageUseCase{storageService: storageService}
+func NewStorageUseCase(s *storage.StorageService) *StorageUseCase {
+	return &StorageUseCase{storageService: s}
 }
 
 type UploadURLRequest struct {
 	Filename    string `json:"filename"`
-	FileName    string `json:"file_name"` // alias
-	Folder      string `json:"folder"`    // optional e.g. "quotes", "profiles", "services"
+	FileName    string `json:"file_name"`
+	Folder      string `json:"folder"`
 	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
 }
 
-func (uc *StorageUseCase) GenerateUploadURL(ctx context.Context, req UploadURLRequest) (*storage.PreSignedURLResponse, error) {
-	filename := req.Filename
-	if filename == "" {
-		filename = req.FileName
+func (uc *StorageUseCase) GenerateUploadURL(ctx context.Context, actor, origin string, req UploadURLRequest) (*storage.PreSignedURLResponse, error) {
+	if _, err := uuid.Parse(actor); err != nil {
+		return nil, domain.ErrForbidden
 	}
-	if filename == "" {
-		filename = fmt.Sprintf("upload_%d.jpg", time.Now().Unix())
-	}
-
-	contentType := req.ContentType
-	if contentType == "" {
-		contentType = "image/jpeg"
-	}
-
 	folder := req.Folder
 	if folder == "" {
 		folder = "quotes"
 	}
-
-	ext := filepath.Ext(filename)
-	cleanName := strings.TrimSuffix(filepath.Base(filename), ext)
-	if cleanName == "" {
-		cleanName = "photo"
+	if folder != "quotes" && folder != "profiles" && folder != "services" {
+		return nil, domain.ErrInvalidInput
 	}
-
-	fileKey := fmt.Sprintf("%s/%s_%s%s", folder, uuid.New().String()[:8], cleanName, ext)
-	return uc.storageService.GeneratePreSignedUploadURL(ctx, fileKey, contentType)
+	ext := map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[req.ContentType]
+	if ext == "" || req.SizeBytes <= 0 || req.SizeBytes > storage.MaxUploadBytes {
+		return nil, fmt.Errorf("%w: image type or size", domain.ErrInvalidInput)
+	}
+	return uc.storageService.GenerateUploadURL(ctx, folder+"/"+actor+"/"+uuid.NewString()+ext, req.ContentType, origin, req.SizeBytes)
 }
+func (uc *StorageUseCase) Storage() *storage.StorageService { return uc.storageService }

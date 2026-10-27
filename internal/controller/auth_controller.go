@@ -3,8 +3,8 @@ package controller
 import (
 	"errors"
 	"net/http"
-	"strings"
 
+	"bikko-app/internal/domain"
 	"bikko-app/internal/model"
 	"bikko-app/internal/service"
 
@@ -28,8 +28,11 @@ func (a *AuthController) Register(c *gin.Context) {
 
 	resp, err := a.authService.Register(c.Request.Context(), req)
 	if err != nil {
-		errLower := strings.ToLower(err.Error())
-		if errors.Is(err, service.ErrUserAlreadyExists) || strings.Contains(errLower, "duplicate") || strings.Contains(errLower, "already_exists") {
+		if errors.Is(err, service.ErrInvalidFirebaseToken) || errors.Is(err, service.ErrInvalidCredentials) {
+			c.JSON(http.StatusUnauthorized, gin.H{"code": "INVALID_CREDENTIALS", "message": "Verificação de telefone obrigatória"})
+			return
+		}
+		if errors.Is(err, service.ErrUserAlreadyExists) || errors.Is(err, domain.ErrConflict) {
 			c.JSON(http.StatusConflict, gin.H{
 				"code":    "USER_ALREADY_EXISTS",
 				"error":   "user_already_exists",
@@ -38,11 +41,11 @@ func (a *AuthController) Register(c *gin.Context) {
 			return
 		}
 
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    "REGISTRATION_FAILED",
-			"error":   err.Error(),
-			"message": err.Error(),
-		})
+		if errors.Is(err, domain.ErrInvalidInput) {
+			c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_REQUEST", "message": "Dados de cadastro inválidos"})
+		} else {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "REGISTRATION_FAILED", "message": "Cadastro temporariamente indisponível"})
+		}
 		return
 	}
 
@@ -87,10 +90,7 @@ func (a *AuthController) CheckPhone(c *gin.Context) {
 			return
 		}
 
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    "CHECK_PHONE_FAILED",
-			"message": err.Error(),
-		})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "AUTH_UNAVAILABLE", "message": "Autenticação temporariamente indisponível"})
 		return
 	}
 
@@ -138,6 +138,10 @@ func (a *AuthController) Login(c *gin.Context) {
 			return
 		}
 
+		if !errors.Is(err, service.ErrInvalidCredentials) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "AUTH_UNAVAILABLE", "message": "Autenticação temporariamente indisponível"})
+			return
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    "INVALID_CREDENTIALS",
 			"message": "Falha ao realizar login. Verifique suas credenciais.",

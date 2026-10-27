@@ -4,11 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
-	"unicode"
-
-	firebaseAuth "firebase.google.com/go/v4/auth"
 
 	"bikko-app/internal/domain"
 	"bikko-app/internal/infrastructure/security"
@@ -31,7 +27,7 @@ type ProfileService interface {
 
 type profileService struct {
 	userRepo    domain.UserRepository
-	mockRepo    repository.ProfileRepository
+	ordersRepo  repository.ProfileRepository
 	authService AuthService
 	jwtService  security.JWTService
 }
@@ -45,10 +41,10 @@ func WithAuthAndJWT(authService AuthService, jwtService security.JWTService) Pro
 	}
 }
 
-func NewProfileService(userRepo domain.UserRepository, mockRepo repository.ProfileRepository, opts ...ProfileServiceOption) ProfileService {
+func NewProfileService(userRepo domain.UserRepository, ordersRepo repository.ProfileRepository, opts ...ProfileServiceOption) ProfileService {
 	ps := &profileService{
-		userRepo: userRepo,
-		mockRepo: mockRepo, // Kept to fetch mock orders temporarily
+		userRepo:   userRepo,
+		ordersRepo: ordersRepo,
 	}
 	for _, opt := range opts {
 		opt(ps)
@@ -56,83 +52,52 @@ func NewProfileService(userRepo domain.UserRepository, mockRepo repository.Profi
 	return ps
 }
 
-func NewProfileServiceWithAuth(userRepo domain.UserRepository, mockRepo repository.ProfileRepository, authService AuthService, jwtService security.JWTService) ProfileService {
+func NewProfileServiceWithAuth(userRepo domain.UserRepository, ordersRepo repository.ProfileRepository, authService AuthService, jwtService security.JWTService) ProfileService {
 	return &profileService{
 		userRepo:    userRepo,
-		mockRepo:    mockRepo,
+		ordersRepo:  ordersRepo,
 		authService: authService,
 		jwtService:  jwtService,
 	}
 }
 
 func (s *profileService) GetProfile(ctx context.Context, userID string) (*model.ProfileResponse, error) {
-	if userID == "" {
-		userID = "user_123"
+	if strings.TrimSpace(userID) == "" {
+		return nil, fmt.Errorf("user id required")
 	}
-
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		// Fallback for mock backward compatibility if the user doesn't exist in DB
-		return s.mockRepo.GetProfileByID(ctx, userID)
+		return nil, fmt.Errorf("profile: load user: %w", err)
 	}
-
-	mockData, _ := s.mockRepo.GetProfileByID(ctx, userID)
+	if user == nil {
+		return nil, ErrUserNotFound
+	}
 	orders := []model.ProfileOrderItem{}
-	if mockData != nil && mockData.Orders != nil {
-		orders = mockData.Orders
+	if s.ordersRepo != nil {
+		data, err := s.ordersRepo.GetProfileByID(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("profile: load orders: %w", err)
+		}
+		if data != nil && data.Orders != nil {
+			orders = data.Orders
+		}
 	}
-
-	rating := fmt.Sprintf("%.1f", user.Rating)
-	if user.Rating == 0 || user.TotalRatings == 0 {
-		rating = "0.0"
+	result := &model.ProfileResponse{ID: user.ID, ImageProfile: user.ProfilePhotoURL, Name: user.FullName, Email: user.Email, Phone: user.Phone, Rating: fmt.Sprintf("%.1f", user.Rating), TotalRatings: user.TotalRatings, Orders: orders}
+	result.LocationName = user.LocationName
+	if user.Latitude != nil {
+		result.Latitude = *user.Latitude
 	}
-
-	isActive := true
-	profession := "Eletricista / Instalação e Manutenção Elétrica"
-	expYears := "5_TO_10"
-	description := "Profissional qualificado e verificado pela plataforma Bikko."
-	locationName := "Pinheiros, São Paulo - SP"
-	lat := -23.5614
-	lon := -46.6914
+	if user.Longitude != nil {
+		result.Longitude = *user.Longitude
+	}
 	if user.Bikker != nil {
-		if user.Bikker.Profession != "" {
-			profession = user.Bikker.Profession
-		}
-		if user.Bikker.ExperienceYears != "" {
-			expYears = user.Bikker.ExperienceYears
-		}
-		if user.Bikker.Description != "" {
-			description = user.Bikker.Description
-		}
-		if user.Bikker.LocationName != "" {
-			locationName = user.Bikker.LocationName
-		}
-		if user.Bikker.Latitude != 0 {
-			lat = user.Bikker.Latitude
-		}
-		if user.Bikker.Longitude != 0 {
-			lon = user.Bikker.Longitude
-		}
-		isActive = user.Bikker.IsActive
+		b := user.Bikker
+		result.Profession, result.ExperienceYears, result.Description = b.Profession, b.ExperienceYears, b.Description
+		result.LocationName, result.Latitude, result.Longitude = b.LocationName, b.Latitude, b.Longitude
+		active := b.IsActive
+		result.IsActive = &active
 	}
-
-	return &model.ProfileResponse{
-		ID:              user.ID,
-		ImageProfile:    user.ProfilePhotoURL,
-		Name:            user.FullName,
-		Email:           user.Email,
-		Phone:           user.Phone,
-		Rating:          rating,
-		TotalRatings:    user.TotalRatings,
-		Profession:      profession,
-		ExperienceYears: expYears,
-		Description:     description,
-		LocationName:    locationName,
-		Latitude:        lat,
-		Longitude:       lon,
-		IsActive:        &isActive,
-		Orders:          orders,
-	}, nil
+	return result, nil
 }
 
 func (s *profileService) DeleteAccount(ctx context.Context, userID string) error {
@@ -142,90 +107,64 @@ func (s *profileService) DeleteAccount(ctx context.Context, userID string) error
 	return s.userRepo.DeleteUser(ctx, userID)
 }
 
-func normalizePhoneDigits(p string) string {
-	var b strings.Builder
-	for _, r := range p {
-		if unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	digits := b.String()
-	if len(digits) > 11 {
-		digits = digits[len(digits)-11:]
-	}
-	return digits
+func normalizePhoneDigits(raw string) string {
+	phone, _ := domain.NormalizePhone(raw)
+	return phone
 }
 
 func (s *profileService) UpdateProfileWithToken(ctx context.Context, userID, name, email, phone, firebaseToken string) (string, error) {
 	if userID == "" {
 		return "", fmt.Errorf("user id required")
 	}
-
-	var oldDigits string
-	currentUser, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		if s.authService != nil {
-			return "", err
-		}
-	} else if currentUser != nil {
-		oldDigits = normalizePhoneDigits(currentUser.Phone)
+		return "", fmt.Errorf("profile: load identity: %w", err)
 	}
-
-	newDigits := normalizePhoneDigits(phone)
-	phoneChanged := newDigits != "" && newDigits != oldDigits
-
-	if phoneChanged {
-		if firebaseToken == "" && s.authService != nil {
+	if user == nil {
+		return "", ErrUserNotFound
+	}
+	canonicalPhone := user.Phone
+	if strings.TrimSpace(phone) != "" {
+		canonicalPhone, err = domain.NormalizePhone(phone)
+		if err != nil {
+			return "", ErrInvalidCredentials
+		}
+	}
+	changed := normalizePhoneDigits(canonicalPhone) != normalizePhoneDigits(user.Phone)
+	if changed {
+		if firebaseToken == "" || s.authService == nil {
 			return "", ErrPhoneChangeRequiresFirebaseToken
 		}
-
-		if firebaseToken != "" {
-			var fbToken *firebaseAuth.Token
-			if s.authService != nil {
-				var verifyErr error
-				fbToken, verifyErr = s.authService.VerifyIDToken(ctx, firebaseToken)
-				if verifyErr != nil {
-					return "", ErrInvalidFirebaseToken
-				}
-			} else {
-				isProduction := os.Getenv("ENV") == "production" || os.Getenv("GIN_MODE") == "release"
-				if !isProduction && (strings.HasPrefix(firebaseToken, "mock_") || firebaseToken == "test_token") {
-					fbToken = &firebaseAuth.Token{
-						UID:    "mock_firebase_uid",
-						Claims: map[string]interface{}{},
-					}
-				} else {
-					return "", ErrInvalidFirebaseToken
-				}
-			}
-
-			if fbToken != nil {
-				if tokenPhone, ok := fbToken.Claims["phone_number"].(string); ok && tokenPhone != "" {
-					phone = tokenPhone
-				}
-			}
+		token, err := s.authService.VerifyIDToken(ctx, firebaseToken)
+		if err != nil || token == nil {
+			return "", ErrInvalidFirebaseToken
 		}
-
-		existingUser, err := s.userRepo.GetByPhone(ctx, phone)
-		if err == nil && existingUser != nil && existingUser.ID != userID {
+		claimedPhone, ok := token.Claims["phone_number"].(string)
+		if !ok {
+			return "", ErrInvalidFirebaseToken
+		}
+		verifiedPhone, err := domain.NormalizePhone(claimedPhone)
+		if err != nil || verifiedPhone != canonicalPhone {
+			return "", ErrInvalidFirebaseToken
+		}
+		existing, err := s.userRepo.GetByPhone(ctx, canonicalPhone)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return "", fmt.Errorf("profile: check phone: %w", err)
+		}
+		if existing != nil && existing.ID != userID {
 			return "", ErrPhoneAlreadyInUse
 		}
 	}
-
-	if err := s.userRepo.UpdateUser(ctx, userID, name, email, phone); err != nil {
-		return "", err
-	}
-
-	var newToken string
-	if phoneChanged && s.jwtService != nil {
-		var tokenErr error
-		newToken, tokenErr = s.jwtService.GenerateToken(userID)
-		if tokenErr != nil {
-			return "", tokenErr
+	if err := s.userRepo.UpdateUser(ctx, userID, name, email, canonicalPhone); err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			return "", ErrPhoneAlreadyInUse
 		}
+		return "", fmt.Errorf("profile: update identity: %w", err)
 	}
-
-	return newToken, nil
+	if changed && s.jwtService != nil {
+		return s.jwtService.GenerateToken(userID)
+	}
+	return "", nil
 }
 
 func (s *profileService) UpdateProfile(ctx context.Context, userID, name, email, phone string) error {

@@ -2,8 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -11,7 +14,10 @@ type Config struct {
 	Port string
 	Env  string
 
-	JWTSecret string
+	JWTSecret         string
+	LocalTestAccounts bool
+	LocalStorage      bool
+	LocalStorageDir   string
 
 	// Postgres DB Config
 	DBHost              string
@@ -49,9 +55,12 @@ type Config struct {
 func LoadConfig() *Config {
 	return &Config{
 		Port: getEnv("PORT", "8080"),
-		Env:  getEnv("ENV", "development"),
+		Env:  getEnv("ENV", ""),
 
-		JWTSecret: getEnv("JWT_SECRET", "super-secret-key-bikko-dev"),
+		JWTSecret:         getEnv("JWT_SECRET", ""),
+		LocalTestAccounts: getEnv("LOCAL_TEST_ACCOUNTS", "false") == "true",
+		LocalStorage:      getEnv("LOCAL_STORAGE", "false") == "true",
+		LocalStorageDir:   getEnv("LOCAL_STORAGE_DIR", ".local-media"),
 
 		DBHost:              getEnv("DB_HOST", "localhost"),
 		DBPort:              getEnv("DB_PORT", "5432"),
@@ -72,23 +81,54 @@ func LoadConfig() *Config {
 		RedisPort:     getEnv("REDIS_PORT", "6379"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 
-		R2AccountID:  getEnv("R2_ACCOUNT_ID", "mock_r2_account"),
-		R2AccessKey:  getEnv("R2_ACCESS_KEY_ID", "mock_r2_access_key"),
-		R2SecretKey:  getEnv("R2_SECRET_ACCESS_KEY", "mock_r2_secret_key"),
+		R2AccountID:  getEnv("R2_ACCOUNT_ID", ""),
+		R2AccessKey:  getEnv("R2_ACCESS_KEY_ID", ""),
+		R2SecretKey:  getEnv("R2_SECRET_ACCESS_KEY", ""),
 		R2BucketName: getEnv("R2_BUCKET_NAME", "bikko-media"),
-		R2PublicURL:  getEnv("R2_PUBLIC_URL", "https://pub-bikko.r2.dev"),
+		R2PublicURL:  getEnv("R2_PUBLIC_URL", ""),
 
-		FirebaseProjectID:       getEnv("FIREBASE_PROJECT_ID", "dummy-project"),
+		FirebaseProjectID:       getEnv("FIREBASE_PROJECT_ID", ""),
 		FirebaseCredentialsFile: getEnv("FIREBASE_CREDENTIALS_FILE", ""),
 	}
+}
+
+// Validate is called before opening dependencies or serving traffic. Test capabilities
+// require two explicit settings and cannot be enabled by missing configuration.
+func (c *Config) Validate() error {
+	if c.Env != "development" && c.Env != "test" && c.Env != "production" {
+		return fmt.Errorf("ENV must be development, test or production")
+	}
+	if len(c.JWTSecret) < 32 || strings.Contains(c.JWTSecret, "super-secret-key-bikko") {
+		return fmt.Errorf("JWT_SECRET must contain at least 32 characters and cannot use the legacy default")
+	}
+	if (c.LocalTestAccounts || c.LocalStorage) && c.Env != "development" {
+		return fmt.Errorf("local test accounts and local storage require ENV=development")
+	}
+	if !c.LocalTestAccounts && c.FirebaseProjectID == "" {
+		return fmt.Errorf("FIREBASE_PROJECT_ID is required outside explicit local account mode")
+	}
+	if !c.LocalStorage {
+		for _, value := range []string{c.R2AccountID, c.R2AccessKey, c.R2SecretKey} {
+			if value == "" || strings.HasPrefix(value, "mock_") {
+				return fmt.Errorf("R2 credentials are required unless LOCAL_STORAGE=true")
+			}
+		}
+		u, err := url.Parse(c.R2PublicURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("R2_PUBLIC_URL must be an HTTPS URL")
+		}
+	}
+	return nil
 }
 
 func (c *Config) GetDSN() string {
 	if c.DatabaseURL != "" {
 		return c.DatabaseURL
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName, c.DBSSLMode)
+	u := url.URL{Scheme: "postgres", User: url.UserPassword(c.DBUser, c.DBPassword), Host: net.JoinHostPort(c.DBHost, c.DBPort), Path: "/" + c.DBName}
+	q := url.Values{"sslmode": {c.DBSSLMode}}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func (c *Config) GetRedisAddr() string {
@@ -119,4 +159,3 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	}
 	return fallback
 }
-
