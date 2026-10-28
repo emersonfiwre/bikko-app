@@ -212,8 +212,14 @@ func TestPortfolioOwnershipSoftDeleteAndRollback(t *testing.T) {
 		t.Fatalf("offline provider published service: %v", err)
 	}
 	s.Description = "Updated while offline"
-	if _, err = repo.UpdateService(ctx, s); err != nil {
+	s.ThumbnailURL = ""
+	s.Photos = []string{}
+	s, err = repo.UpdateService(ctx, s)
+	if err != nil {
 		t.Fatalf("offline provider could not manage portfolio: %v", err)
+	}
+	if s.ThumbnailURL != "" || len(s.Photos) != 0 {
+		t.Fatalf("service cover or photos were not cleared: %+v", s)
 	}
 	if err = repo.DeleteService(ctx, s.ID, outsider); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("foreign delete allowed: %v", err)

@@ -246,7 +246,9 @@ func (r *serviceRepository) UpdateService(ctx context.Context, s *domain.Service
 	if len([]rune(s.Name)) > 255 || len([]rune(s.Description)) > 4000 {
 		return nil, domain.ErrInvalidInput
 	}
-	_, err = tx.Exec(ctx, `UPDATE services SET name=COALESCE(NULLIF($2,''),name),description=$3,thumbnail_url=COALESCE(NULLIF($4,''),thumbnail_url),category_id=COALESCE(NULLIF($5,'')::uuid,category_id),is_active=$6,updated_at=NOW() WHERE id=$1::uuid`, s.ID, s.Name, s.Description, thumbnail, category, s.IsActive)
+	// Portfolio updates are full representations: an empty thumbnail deliberately
+	// clears a cover that the provider removed, instead of retaining stale media.
+	_, err = tx.Exec(ctx, `UPDATE services SET name=COALESCE(NULLIF($2,''),name),description=$3,thumbnail_url=$4,category_id=COALESCE(NULLIF($5,'')::uuid,category_id),is_active=$6,updated_at=NOW() WHERE id=$1::uuid`, s.ID, s.Name, s.Description, thumbnail, category, s.IsActive)
 	if err != nil {
 		return nil, err
 	}
