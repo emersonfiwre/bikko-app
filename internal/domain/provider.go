@@ -110,4 +110,6 @@ type ClientEvaluationRequest struct {
 	Stars           int      `json:"stars"`
 	Tags            []string `json:"tags"`
 	Comment         string   `json:"comment"`
+	// RequestKey is populated from the Idempotency-Key header, never from JSON.
+	RequestKey string `json:"-"`
 }

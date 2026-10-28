@@ -16,6 +16,8 @@ type Review struct {
 	LikeCount    int       `json:"like_count"`
 	DislikeCount int       `json:"dislike_count"`
 	CreatedAt    time.Time `json:"created_at"`
+	// RequestKey is transport metadata used only to make a client retry safe.
+	RequestKey string `json:"-"`
 }
 
 type CreateReviewInput struct {
@@ -23,6 +25,7 @@ type CreateReviewInput struct {
 	ReviewerID string `json:"reviewer_id"`
 	Rating     int    `json:"rating"`
 	Comment    string `json:"comment"`
+	RequestKey string `json:"-"`
 }
 
 type ReviewRepository interface {

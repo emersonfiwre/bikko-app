@@ -61,6 +61,7 @@ func TestReviewController_CreateReview(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/reviews", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "review-create")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -93,6 +94,7 @@ func TestReviewController_CreateSolicitationReview(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/solicitations/sol_4/review", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "review-solicitation")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -122,6 +124,7 @@ func TestReviewController_CreateOrderReview(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/orders/44444444-0000-0000-0000-000000000004/review", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "review-order")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -142,6 +145,7 @@ func TestReviewController_InvalidRating(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/solicitations/sol_4/review", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "review-invalid-rating")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -166,6 +170,7 @@ func TestReviewController_OrderNotCompleted(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/solicitations/sol_1/review", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "review-order-incomplete")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -190,6 +195,7 @@ func TestReviewController_AlreadyReviewed(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/solicitations/sol_4/review", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "review-already-done")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -204,9 +210,21 @@ func TestReviewCannotImpersonateAnotherReviewer(t *testing.T) {
 	r := setupReviewTestRouter(repo)
 	req := httptest.NewRequest("POST", "/api/v1/reviews", bytes.NewBufferString(`{"order_id":"any","reviewer_id":"victim","rating":5}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "review-spoof")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != 403 || called {
 		t.Fatalf("spoof accepted: code=%d repoCalled=%v", w.Code, called)
+	}
+}
+
+func TestReviewRequiresIdempotencyKey(t *testing.T) {
+	r := setupReviewTestRouter(&mockReviewRepo{})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/solicitations/sol_4/review", bytes.NewBufferString(`{"rating":5}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 without Idempotency-Key, got %d", w.Code)
 	}
 }

@@ -32,6 +32,10 @@ func (c *ReviewController) handleReview(ctx *gin.Context, pathID bool) {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "UNAUTHORIZED"})
 		return
 	}
+	requestKey, ok := requiredIdempotencyKey(ctx)
+	if !ok {
+		return
+	}
 	var req CreateReviewRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		contractError(ctx, domain.ErrInvalidInput)
@@ -57,7 +61,7 @@ func (c *ReviewController) handleReview(ctx *gin.Context, pathID bool) {
 	if len(req.Tags) > 0 {
 		comment = strings.TrimSpace("[" + strings.Join(req.Tags, ", ") + "] " + comment)
 	}
-	review, err := c.ratingUC.CreateReview(ctx.Request.Context(), domain.CreateReviewInput{OrderID: id, ReviewerID: actor, Rating: req.Rating, Comment: comment})
+	review, err := c.ratingUC.CreateReview(ctx.Request.Context(), domain.CreateReviewInput{OrderID: id, ReviewerID: actor, Rating: req.Rating, Comment: comment, RequestKey: requestKey})
 	if err != nil {
 		contractError(ctx, err)
 		return

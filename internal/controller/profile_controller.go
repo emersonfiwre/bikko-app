@@ -119,7 +119,7 @@ func (p *ProfileController) UpdateProfile(c *gin.Context) {
 // UpdateProfilePhotoRequest receives the public Cloudflare R2 URL of an image
 // previously uploaded by the client through a pre-signed PUT URL.
 type UpdateProfilePhotoRequest struct {
-	PhotoURL string `json:"photo_url" binding:"required,url"`
+	PhotoURL string `json:"photo_url" binding:"required,http_url,max=512"`
 }
 
 func (p *ProfileController) UpdateProfilePhoto(c *gin.Context) {
@@ -136,7 +136,16 @@ func (p *ProfileController) UpdateProfilePhoto(c *gin.Context) {
 	}
 
 	if err := p.profileService.UpdateProfilePhoto(c.Request.Context(), userID, req.PhotoURL); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile photo"})
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "Profile not found"})
+		case errors.Is(err, domain.ErrInvalidInput):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid profile photo"})
+		case errors.Is(err, domain.ErrUnavailable):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Profile service unavailable"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile photo"})
+		}
 		return
 	}
 

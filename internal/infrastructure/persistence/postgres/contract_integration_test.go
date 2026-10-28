@@ -127,7 +127,7 @@ func TestContractLifecycleIsolationAndFiveCounters(t *testing.T) {
 		t.Fatalf("reopened accepted contract: %v", err)
 	}
 	reviews := NewReviewRepository(pool)
-	review := &domain.Review{OrderID: quote.ID, ReviewerID: client, Rating: 5}
+	review := &domain.Review{OrderID: quote.ID, ReviewerID: client, Rating: 5, RequestKey: "client-review-once"}
 	if err := reviews.CreateReviewInTx(ctx, review); !errors.Is(err, domain.ErrOrderNotCompleted) {
 		t.Fatalf("review completed order implicitly: %v", err)
 	}
@@ -135,17 +135,32 @@ func TestContractLifecycleIsolationAndFiveCounters(t *testing.T) {
 	if err := reviews.CreateReviewInTx(ctx, review); err != nil {
 		t.Fatal(err)
 	}
-	if err := reviews.CreateReviewInTx(ctx, review); !errors.Is(err, domain.ErrAlreadyReviewed) {
-		t.Fatalf("duplicate review: %v", err)
+	if err := reviews.CreateReviewInTx(ctx, review); err != nil {
+		t.Fatalf("retry of review failed: %v", err)
+	}
+	changedReview := &domain.Review{OrderID: quote.ID, ReviewerID: client, Rating: 1, RequestKey: "client-review-once"}
+	if err := reviews.CreateReviewInTx(ctx, changedReview); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("changed retry accepted: %v", err)
+	}
+	newKeyReview := &domain.Review{OrderID: quote.ID, ReviewerID: client, Rating: 5, RequestKey: "client-review-new-key"}
+	if err := reviews.CreateReviewInTx(ctx, newKeyReview); !errors.Is(err, domain.ErrAlreadyReviewed) {
+		t.Fatalf("duplicate review with a new key: %v", err)
 	}
 	if err := repo.SubmitClientEvaluation(ctx, quote.ID, otherProvider, domain.ClientEvaluationRequest{Stars: 4}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("foreign provider rated: %v", err)
 	}
-	if err := repo.SubmitClientEvaluation(ctx, quote.ID, provider, domain.ClientEvaluationRequest{Stars: 4, TechnicalReport: "Lights fixed"}); err != nil {
+	providerReview := domain.ClientEvaluationRequest{Stars: 4, TechnicalReport: "Lights fixed", RequestKey: "provider-review-once"}
+	if err := repo.SubmitClientEvaluation(ctx, quote.ID, provider, providerReview); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SubmitClientEvaluation(ctx, quote.ID, provider, domain.ClientEvaluationRequest{Stars: 1}); !errors.Is(err, domain.ErrAlreadyReviewed) {
-		t.Fatalf("duplicate client rating: %v", err)
+	if err := repo.SubmitClientEvaluation(ctx, quote.ID, provider, providerReview); err != nil {
+		t.Fatalf("retry of client rating failed: %v", err)
+	}
+	if err := repo.SubmitClientEvaluation(ctx, quote.ID, provider, domain.ClientEvaluationRequest{Stars: 1, RequestKey: "provider-review-once"}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("changed client rating retry accepted: %v", err)
+	}
+	if err := repo.SubmitClientEvaluation(ctx, quote.ID, provider, domain.ClientEvaluationRequest{Stars: 1, RequestKey: "provider-review-new-key"}); !errors.Is(err, domain.ErrAlreadyReviewed) {
+		t.Fatalf("duplicate client rating with a new key: %v", err)
 	}
 	var finalPrice float64
 	var proposalID *string
@@ -286,5 +301,59 @@ func TestCreateIdempotencyKeyRejectsDifferentPayload(t *testing.T) {
 	req.Description = "Different work"
 	if _, err = repo.CreateSolicitation(ctx, req); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("reused key changed operation: %v", err)
+	}
+}
+
+func TestConcurrentCreateIdempotencyKeyCreatesOneSolicitation(t *testing.T) {
+	pool := contractTestPool(t)
+	ctx := context.Background()
+	client, provider, _, _ := contractUsers(t, pool)
+	repo := NewSolicitationPostgresRepository(pool)
+	lat, lon := -23.5641, -46.6823
+	req := model.SolicitationItem{
+		ClientID:        client,
+		ProviderID:      provider,
+		ServiceName:     "Concurrent repair",
+		Description:     "Repair lights safely",
+		LocationAddress: "Pinheiros",
+		Latitude:        &lat,
+		Longitude:       &lon,
+		Photos:          []string{},
+		RequestKey:      "create-concurrently-once",
+	}
+
+	var wg sync.WaitGroup
+	items := make(chan *model.SolicitationItem, 10)
+	errs := make(chan error, 10)
+	for i := 0; i < cap(items); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			item, err := repo.CreateSolicitation(ctx, req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			items <- item
+		}()
+	}
+	wg.Wait()
+	close(items)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	var id string
+	for item := range items {
+		if id == "" {
+			id = item.ID
+		} else if item.ID != id {
+			t.Fatalf("idempotent retry created different solicitations: %s and %s", id, item.ID)
+		}
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM quote_requests WHERE customer_id=$1::uuid AND request_key=$2`, client, req.RequestKey).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expected one solicitation after concurrent retry, got %d: %v", count, err)
 	}
 }

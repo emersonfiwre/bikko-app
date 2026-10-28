@@ -16,6 +16,8 @@ type providerRepositoryStub struct {
 	actor   string
 	item    model.SolicitationItem
 	command model.SolicitationStatusUpdateInput
+	evalID  string
+	evalReq domain.ClientEvaluationRequest
 	err     error
 }
 
@@ -26,6 +28,12 @@ func (s *providerRepositoryStub) GetSolicitationForUser(_ context.Context, _ str
 func (s *providerRepositoryStub) UpdateSolicitationStatus(_ context.Context, _ string, in model.SolicitationStatusUpdateInput) (*model.SolicitationItem, error) {
 	s.command = in
 	return &s.item, s.err
+}
+func (s *providerRepositoryStub) SubmitClientEvaluation(_ context.Context, id, actor string, req domain.ClientEvaluationRequest) error {
+	s.evalID = id
+	s.actor = actor
+	s.evalReq = req
+	return s.err
 }
 func providerRequest(ctrl *ProviderController, actor string, isProvider bool, action, body string) *httptest.ResponseRecorder {
 	gin.SetMode(gin.TestMode)
@@ -108,5 +116,34 @@ func TestProviderDatabaseFailureNeverReturnsFakeDetails(t *testing.T) {
 	w := providerRequest(ctrl, "owner", true, "proposal", `{"price":50}`)
 	if w.Code != 503 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestProviderEvaluationRequiresAndForwardsIdempotencyKey(t *testing.T) {
+	repo := &providerRepositoryStub{}
+	ctrl := NewProviderControllerWithDeps(repo, nil, nil)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("userID", "provider")
+		c.Set("isBikker", true)
+	})
+	r.POST("/provider/evaluations", ctrl.SubmitClientEvaluation)
+
+	withoutKey := httptest.NewRequest("POST", "/provider/evaluations", strings.NewReader(`{"solicitation_id":"quote-1","stars":5}`))
+	withoutKey.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, withoutKey)
+	if w.Code != 400 || repo.evalID != "" {
+		t.Fatalf("evaluation without key: code=%d called=%q", w.Code, repo.evalID)
+	}
+
+	withKey := httptest.NewRequest("POST", "/provider/evaluations", strings.NewReader(`{"solicitation_id":"quote-1","stars":5}`))
+	withKey.Header.Set("Content-Type", "application/json")
+	withKey.Header.Set("Idempotency-Key", "provider-evaluation-once")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, withKey)
+	if w.Code != 200 || repo.evalID != "quote-1" || repo.evalReq.RequestKey != "provider-evaluation-once" {
+		t.Fatalf("evaluation key was not forwarded: code=%d id=%q key=%q", w.Code, repo.evalID, repo.evalReq.RequestKey)
 	}
 }

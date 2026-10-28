@@ -61,7 +61,7 @@ func ResetLocalAccounts(ctx context.Context, pool *pgxpool.Pool) error {
 		`DELETE FROM services WHERE bikker_id=ANY($1::uuid[])`,
 		`DELETE FROM notification_outbox WHERE user_id=ANY($1::uuid[])`,
 		`DELETE FROM user_devices WHERE user_id=ANY($1::uuid[])`,
-		`UPDATE users SET rating=0,total_ratings=0,device_token=NULL WHERE id=ANY($1::uuid[])`,
+		`UPDATE users SET rating=0,total_ratings=0,device_token=NULL,profile_photo_url=NULL WHERE id=ANY($1::uuid[])`,
 		`UPDATE bikkers SET rating=0,total_reviews=0,is_active=TRUE WHERE id=ANY($1::uuid[])`,
 	}
 	for _, statement := range statements {

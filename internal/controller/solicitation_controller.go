@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"bikko-app/internal/domain"
 	"bikko-app/internal/infrastructure/http/middleware"
@@ -140,6 +141,11 @@ func (c *SolicitationController) CreateSolicitation(ctx *gin.Context) {
 	if !ok {
 		return
 	}
+	requestKey := strings.TrimSpace(ctx.GetHeader("Idempotency-Key"))
+	if requestKey == "" || len(requestKey) > 128 {
+		solicitationError(ctx, domain.ErrInvalidInput)
+		return
+	}
 	var req model.CreateSolicitationRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		solicitationError(ctx, domain.ErrInvalidInput)
@@ -149,11 +155,11 @@ func (c *SolicitationController) CreateSolicitation(ctx *gin.Context) {
 	var item *model.SolicitationItem
 	var err error
 	if c.uc != nil {
-		item, err = c.uc.CreateSolicitation(ctx.Request.Context(), actor, ctx.GetHeader("Idempotency-Key"), req)
+		item, err = c.uc.CreateSolicitation(ctx.Request.Context(), actor, requestKey, req)
 	} else {
 		// Fallback for direct repo usage in tests
 		item, err = c.repo.CreateSolicitation(ctx.Request.Context(), model.SolicitationItem{
-			RequestKey:      ctx.GetHeader("Idempotency-Key"),
+			RequestKey:      requestKey,
 			ClientID:        actor,
 			ProviderID:      req.ProviderID,
 			ServiceID:       req.ServiceID,

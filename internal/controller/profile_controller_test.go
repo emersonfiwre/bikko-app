@@ -666,4 +666,26 @@ func TestProfileController_UpdateProfilePhoto(t *testing.T) {
 			t.Errorf("unexpected saved values: userID=%s, photoURL=%s", savedUserID, savedURL)
 		}
 	})
+
+	t.Run("accepts signed local storage URL", func(t *testing.T) {
+		var savedURL string
+		ctrl := NewProfileController(&fakeProfileService{
+			updateProfilePhotoFunc: func(_ context.Context, _ string, photoURL string) error {
+				savedURL = photoURL
+				return nil
+			},
+		})
+		router := gin.New()
+		router.PUT("/profile/photo", func(c *gin.Context) {
+			c.Set("userID", "user_123")
+			ctrl.UpdateProfilePhoto(c)
+		})
+		url := "http://10.0.2.2:8080/api/v1/local-storage/profiles/user_123/avatar.jpg?expires=1&content_type=image%2Fjpeg&signature=signed"
+		body, _ := json.Marshal(UpdateProfilePhotoRequest{PhotoURL: url})
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/profile/photo", bytes.NewReader(body)))
+		if w.Code != http.StatusOK || savedURL != url {
+			t.Fatalf("expected signed local photo URL to persist, got %d %q", w.Code, savedURL)
+		}
+	})
 }

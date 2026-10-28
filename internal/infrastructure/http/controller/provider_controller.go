@@ -351,11 +351,16 @@ func (p *ProviderController) SubmitClientEvaluation(c *gin.Context) {
 	if !ok || !p.repository(c) {
 		return
 	}
+	requestKey, ok := requiredIdempotencyKey(c)
+	if !ok {
+		return
+	}
 	var req domain.ClientEvaluationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		contractError(c, domain.ErrInvalidInput)
 		return
 	}
+	req.RequestKey = requestKey
 	err := p.solUC.SubmitClientEvaluation(c.Request.Context(), actor, req.SolicitationID, req)
 	if err != nil {
 		contractError(c, err)

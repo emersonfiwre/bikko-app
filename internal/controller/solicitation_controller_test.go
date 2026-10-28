@@ -36,6 +36,10 @@ func (s *solicitationStub) UpdateSolicitationStatus(_ context.Context, _ string,
 	return &model.SolicitationItem{ID: "persisted"}, nil
 }
 func solicitationRequest(ctrl *SolicitationController, actor, method, path, body string) *httptest.ResponseRecorder {
+	return solicitationRequestWithKey(ctrl, actor, method, path, body, "")
+}
+
+func solicitationRequestWithKey(ctrl *SolicitationController, actor, method, path, body, requestKey string) *httptest.ResponseRecorder {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	if actor != "" {
@@ -47,6 +51,9 @@ func solicitationRequest(ctrl *SolicitationController, actor, method, path, body
 	r.PATCH("/solicitations/:id/status", ctrl.UpdateStatus)
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	if requestKey != "" {
+		req.Header.Set("Idempotency-Key", requestKey)
+	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
@@ -84,9 +91,19 @@ func TestPersistenceFailureDoesNotCreateMemoryOrder(t *testing.T) {
 	repo := &solicitationStub{createErr: errors.New("database disconnected")}
 	ctrl := NewSolicitationController(nil)
 	ctrl.SetPostgresRepository(repo)
-	w := solicitationRequest(ctrl, "real-actor", "POST", "/solicitations", `{"description":"Repair","provider_id":"provider"}`)
+	w := solicitationRequestWithKey(ctrl, "real-actor", "POST", "/solicitations", `{"description":"Repair","provider_id":"provider"}`, "create-once")
 	if w.Code != 500 || repo.actor != "real-actor" {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestCreateSolicitationRequiresIdempotencyKey(t *testing.T) {
+	repo := &solicitationStub{}
+	ctrl := NewSolicitationController(nil)
+	ctrl.SetPostgresRepository(repo)
+	w := solicitationRequest(ctrl, "real-actor", "POST", "/solicitations", `{"description":"Repair","provider_id":"provider"}`)
+	if w.Code != 400 || repo.actor != "" {
+		t.Fatal(w.Code, w.Body.String(), repo.actor)
 	}
 }
 func TestStatusIdentityCannotBeSpoofed(t *testing.T) {

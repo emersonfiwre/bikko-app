@@ -37,7 +37,7 @@ Use `docker exec bikko-backend-app ./migrate` to apply the same runner manually.
 - `GET /api/v1/ready`: PostgreSQL readiness; returns503 when unavailable.
 - `POST /api/v1/auth/login`, `/register`: verified identity or the two explicit local fixtures.
 - `/api/v1/provider/*`: authenticated professional role. Availability is separate: offline professionals can manage their profile and existing contracts.
-- `POST /api/v1/solicitations` and negotiation mutations support `Idempotency-Key`; reusing a key with different data returns409.
+- `POST /api/v1/solicitations` requires `Idempotency-Key`; a retry with the same key and data returns the original solicitation, while reusing it with different data returns409.
 - `PATCH /api/v1/solicitations/:id/status`: participant-scoped commands. Accept uses the last persisted proposal from the other party, never an arbitrary request price. Fifth price counter-offer remains acceptable; information requests do not consume a price round.
 - Evaluations require explicit completion and correct participation; ratings and state changes are atomic.
 - `POST /api/v1/storage/upload-url`: authenticated, scoped key, supported MIME and `size_bytes` required. Local signed PUT/GET URLs are issued by the development storage adapter.

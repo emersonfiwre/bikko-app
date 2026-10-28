@@ -756,7 +756,7 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 	if !r.HasPool() {
 		return domain.ErrUnavailable
 	}
-	if req.Stars < 1 || req.Stars > 5 || len([]rune(req.TechnicalReport)) > 280 || len([]rune(req.Comment)) > 120 {
+	if req.Stars < 1 || req.Stars > 5 || len([]rune(req.TechnicalReport)) > 280 || len([]rune(req.Comment)) > 120 || len(req.RequestKey) > 128 {
 		return domain.ErrInvalidInput
 	}
 	tx, err := r.pool.Begin(ctx)
@@ -782,11 +782,33 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 	if len(req.Tags) > 0 {
 		comment = strings.TrimSpace("[" + strings.Join(req.Tags, ", ") + "] " + comment)
 	}
+	var fingerprint string
+	if req.RequestKey != "" {
+		fingerprint, err = clientEvaluationFingerprint(orderID, req, comment)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, actor+":"+req.RequestKey); err != nil {
+			return err
+		}
+		var previousOrderID, previousFingerprint string
+		err = tx.QueryRow(ctx, `SELECT order_id::text,COALESCE(request_fingerprint,'') FROM client_reviews WHERE bikker_id=$1::uuid AND request_key=$2 FOR UPDATE`, actor, req.RequestKey).
+			Scan(&previousOrderID, &previousFingerprint)
+		if err == nil {
+			if previousOrderID != orderID || previousFingerprint != fingerprint {
+				return domain.ErrConflict
+			}
+			return tx.Commit(ctx)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+	}
 	var lockedUser string
 	if err = tx.QueryRow(ctx, `SELECT id::text FROM users WHERE id=$1::uuid FOR UPDATE`, q.client).Scan(&lockedUser); err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `INSERT INTO client_reviews(order_id,client_id,bikker_id,rating,comment,technical_report) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6) ON CONFLICT(order_id,bikker_id) DO NOTHING`, orderID, q.client, q.provider, req.Stars, comment, req.TechnicalReport)
+	tag, err := tx.Exec(ctx, `INSERT INTO client_reviews(order_id,client_id,bikker_id,rating,comment,technical_report,request_key,request_fingerprint) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,NULLIF($7,''),NULLIF($8,'')) ON CONFLICT(order_id,bikker_id) DO NOTHING`, orderID, q.client, q.provider, req.Stars, comment, req.TechnicalReport, req.RequestKey, fingerprint)
 	if err != nil {
 		return err
 	}
@@ -810,6 +832,24 @@ func (r *SolicitationPostgresRepository) SubmitClientEvaluation(ctx context.Cont
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func clientEvaluationFingerprint(orderID string, req domain.ClientEvaluationRequest, comment string) (string, error) {
+	payload, err := json.Marshal(struct {
+		OrderID         string `json:"order_id"`
+		Stars           int    `json:"stars"`
+		Comment         string `json:"comment"`
+		TechnicalReport string `json:"technical_report"`
+	}{
+		OrderID:         orderID,
+		Stars:           req.Stars,
+		Comment:         comment,
+		TechnicalReport: strings.TrimSpace(req.TechnicalReport),
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(payload)), nil
 }
 
 func enqueueContractNotification(ctx context.Context, tx pgx.Tx, userID, quoteID, title, body, event string) error {
