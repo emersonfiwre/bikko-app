@@ -169,6 +169,9 @@ func storePhotos(ctx context.Context, tx pgx.Tx, id string, photos []string) err
 	return nil
 }
 func serviceFingerprint(bikkerID, categoryID, name, description, thumbnail string, lat, lon float64, isActive bool, photos []string) (string, error) {
+	if photos == nil {
+		photos = []string{}
+	}
 	body, err := json.Marshal(struct {
 		Bikker, Category, Name, Description, Thumbnail string
 		Lat, Lon                                       float64
@@ -182,6 +185,9 @@ func serviceFingerprint(bikkerID, categoryID, name, description, thumbnail strin
 }
 
 func serviceUpdateFingerprint(id, bikkerID, categoryID, name, description, thumbnail string, isActive bool, photos []string) (string, error) {
+	if photos == nil {
+		photos = []string{}
+	}
 	body, err := json.Marshal(struct {
 		ID, Bikker, Category, Name, Description, Thumbnail string
 		Active                                             bool
@@ -294,6 +300,8 @@ func (r *serviceRepository) UpdateService(ctx context.Context, s *domain.Service
 	if thumbnail == "" && len(s.Photos) > 0 {
 		thumbnail = s.Photos[0]
 	}
+	s.Name = strings.TrimSpace(s.Name)
+	s.Description = strings.TrimSpace(s.Description)
 	if len([]rune(s.Name)) > 255 || len([]rune(s.Description)) > 4000 {
 		return nil, domain.ErrInvalidInput
 	}

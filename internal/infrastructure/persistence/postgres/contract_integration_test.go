@@ -238,9 +238,21 @@ func TestPortfolioOwnershipSoftDeleteAndRollback(t *testing.T) {
 	s.Description = "Updated while offline"
 	s.ThumbnailURL = ""
 	s.Photos = []string{}
+	s.RequestKey = "panel-update-1"
 	s, err = repo.UpdateService(ctx, s)
 	if err != nil {
 		t.Fatalf("offline provider could not manage portfolio: %v", err)
+	}
+	// Replay update with identical key and payload
+	replayUpdate, err := repo.UpdateService(ctx, s)
+	if err != nil || replayUpdate.ID != s.ID || replayUpdate.Description != s.Description {
+		t.Fatalf("portfolio update idempotent replay failed: %v", err)
+	}
+	// Conflict on different payload with same key
+	conflictUpdate := *s
+	conflictUpdate.Description = "Conflicting description update"
+	if _, err = repo.UpdateService(ctx, &conflictUpdate); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("expected conflict on changed update payload, got %v", err)
 	}
 	if s.ThumbnailURL != "" || len(s.Photos) != 0 {
 		t.Fatalf("service cover or photos were not cleared: %+v", s)
