@@ -252,7 +252,14 @@ func (r *serviceRepository) CreateService(ctx context.Context, s *domain.Service
 			if err = tx.Commit(ctx); err != nil {
 				return nil, err
 			}
-			return r.getByID(ctx, previousID, true)
+			res, err := r.getByID(ctx, previousID, true)
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				res.RequestKey = s.RequestKey
+			}
+			return res, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
@@ -268,7 +275,14 @@ func (r *serviceRepository) CreateService(ctx context.Context, s *domain.Service
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return r.getByID(ctx, s.ID, true)
+	res, err := r.getByID(ctx, s.ID, true)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		res.RequestKey = s.RequestKey
+	}
+	return res, nil
 }
 func (r *serviceRepository) UpdateService(ctx context.Context, s *domain.Service) (*domain.Service, error) {
 	if r.pool == nil {
@@ -324,7 +338,14 @@ func (r *serviceRepository) UpdateService(ctx context.Context, s *domain.Service
 			if err = tx.Commit(ctx); err != nil {
 				return nil, err
 			}
-			return r.getByID(ctx, previousID, true)
+			res, err := r.getByID(ctx, previousID, true)
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				res.RequestKey = s.RequestKey
+			}
+			return res, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
@@ -344,7 +365,14 @@ func (r *serviceRepository) UpdateService(ctx context.Context, s *domain.Service
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return r.getByID(ctx, s.ID, true)
+	res, err := r.getByID(ctx, s.ID, true)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		res.RequestKey = s.RequestKey
+	}
+	return res, nil
 }
 func (r *serviceRepository) DeleteService(ctx context.Context, id, actor string) error {
 	if r.pool == nil {

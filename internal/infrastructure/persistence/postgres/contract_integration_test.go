@@ -236,8 +236,6 @@ func TestPortfolioOwnershipSoftDeleteAndRollback(t *testing.T) {
 		t.Fatalf("offline provider published service: %v", err)
 	}
 	s.Description = "Updated while offline"
-	s.ThumbnailURL = ""
-	s.Photos = []string{}
 	s.RequestKey = "panel-update-1"
 	s, err = repo.UpdateService(ctx, s)
 	if err != nil {
@@ -254,9 +252,6 @@ func TestPortfolioOwnershipSoftDeleteAndRollback(t *testing.T) {
 	if _, err = repo.UpdateService(ctx, &conflictUpdate); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("expected conflict on changed update payload, got %v", err)
 	}
-	if s.ThumbnailURL != "" || len(s.Photos) != 0 {
-		t.Fatalf("service cover or photos were not cleared: %+v", s)
-	}
 	if err = repo.DeleteService(ctx, s.ID, outsider); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("foreign delete allowed: %v", err)
 	}
@@ -272,6 +267,30 @@ func TestPortfolioOwnershipSoftDeleteAndRollback(t *testing.T) {
 	}
 	if err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM service_photos WHERE service_id=$1::uuid`, s.ID).Scan(&photos); err != nil || photos != 1 {
 		t.Fatalf("history photos lost: %d %v", photos, err)
+	}
+	// Verify clearing cover and photos explicitly updates representations
+	clearService, err := repo.CreateService(ctx, &domain.Service{
+		BikkerID:   provider,
+		CategoryID: category,
+		Name:       "Service with photos to clear",
+		Latitude:   -23.5614,
+		Longitude:  -46.6914,
+		IsActive:   false,
+		Photos:     []string{"https://media.test.invalid/photo-to-clear.jpg"},
+		RequestKey: "panel-clear-create-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearService.ThumbnailURL = ""
+	clearService.Photos = []string{}
+	clearService.RequestKey = "panel-clear-update-1"
+	cleared, err := repo.UpdateService(ctx, clearService)
+	if err != nil {
+		t.Fatalf("could not clear service media: %v", err)
+	}
+	if cleared.ThumbnailURL != "" || len(cleared.Photos) != 0 {
+		t.Fatalf("service cover or photos were not cleared: %+v", cleared)
 	}
 }
 
