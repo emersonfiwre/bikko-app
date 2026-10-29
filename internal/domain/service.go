@@ -46,6 +46,8 @@ type Service struct {
 	ProviderName     string              `json:"provider_name,omitempty"`
 	ProviderTitle    string              `json:"provider_title,omitempty"`
 	ProviderPhotoURL string              `json:"provider_photo_url,omitempty"`
+	RequestKey       string              `json:"request_key,omitempty"`
+	RequestFingerprint string            `json:"request_fingerprint,omitempty"`
 	CreatedAt        time.Time           `json:"created_at"`
 	UpdatedAt        time.Time           `json:"updated_at"`
 }

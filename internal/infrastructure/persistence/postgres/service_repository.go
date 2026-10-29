@@ -3,6 +3,7 @@ package postgres
 import (
 	"bikko-app/internal/domain"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -167,6 +168,31 @@ func storePhotos(ctx context.Context, tx pgx.Tx, id string, photos []string) err
 	}
 	return nil
 }
+func serviceFingerprint(bikkerID, categoryID, name, description, thumbnail string, lat, lon float64, isActive bool, photos []string) (string, error) {
+	body, err := json.Marshal(struct {
+		Bikker, Category, Name, Description, Thumbnail string
+		Lat, Lon                                       float64
+		Active                                         bool
+		Photos                                         []string
+	}{bikkerID, categoryID, name, description, thumbnail, lat, lon, isActive, photos})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(body)), nil
+}
+
+func serviceUpdateFingerprint(id, bikkerID, categoryID, name, description, thumbnail string, isActive bool, photos []string) (string, error) {
+	body, err := json.Marshal(struct {
+		ID, Bikker, Category, Name, Description, Thumbnail string
+		Active                                             bool
+		Photos                                             []string
+	}{id, bikkerID, categoryID, name, description, thumbnail, isActive, photos})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(body)), nil
+}
+
 func (r *serviceRepository) CreateService(ctx context.Context, s *domain.Service) (*domain.Service, error) {
 	if r.pool == nil {
 		return nil, domain.ErrUnavailable
@@ -197,13 +223,38 @@ func (r *serviceRepository) CreateService(ctx context.Context, s *domain.Service
 	if thumbnail == "" && len(s.Photos) > 0 {
 		thumbnail = s.Photos[0]
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO services(bikker_id,category_id,name,description,thumbnail_url,location_geom,is_active) VALUES($1::uuid,$2::uuid,$3,$4,$5,ST_SetSRID(ST_MakePoint($6,$7),4326)::geography,$8) RETURNING id::text`, s.BikkerID, category, strings.TrimSpace(s.Name), s.Description, thumbnail, s.Longitude, s.Latitude, s.IsActive).Scan(&s.ID)
-	if err != nil {
-		return nil, fmt.Errorf("create service: %w", err)
-	}
 	photos := s.Photos
 	if len(photos) == 0 && thumbnail != "" {
 		photos = []string{thumbnail}
+	}
+	var fingerprint string
+	if s.RequestKey != "" {
+		var e error
+		fingerprint, e = serviceFingerprint(s.BikkerID, category, strings.TrimSpace(s.Name), s.Description, thumbnail, s.Latitude, s.Longitude, s.IsActive, photos)
+		if e != nil {
+			return nil, e
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, s.BikkerID+":"+s.RequestKey); err != nil {
+			return nil, err
+		}
+		var previousID, previousFingerprint string
+		err = tx.QueryRow(ctx, `SELECT id::text,COALESCE(request_fingerprint,'') FROM services WHERE bikker_id=$1::uuid AND request_key=$2`, s.BikkerID, s.RequestKey).Scan(&previousID, &previousFingerprint)
+		if err == nil {
+			if previousFingerprint != fingerprint {
+				return nil, domain.ErrConflict
+			}
+			if err = tx.Commit(ctx); err != nil {
+				return nil, err
+			}
+			return r.getByID(ctx, previousID, true)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO services(bikker_id,category_id,name,description,thumbnail_url,location_geom,is_active,request_key,request_fingerprint) VALUES($1::uuid,$2::uuid,$3,$4,$5,ST_SetSRID(ST_MakePoint($6,$7),4326)::geography,$8,NULLIF($9,''),NULLIF($10,'')) RETURNING id::text`, s.BikkerID, category, strings.TrimSpace(s.Name), s.Description, thumbnail, s.Longitude, s.Latitude, s.IsActive, s.RequestKey, fingerprint).Scan(&s.ID)
+	if err != nil {
+		return nil, fmt.Errorf("create service: %w", err)
 	}
 	if err = storePhotos(ctx, tx, s.ID, photos); err != nil {
 		return nil, err
@@ -246,9 +297,34 @@ func (r *serviceRepository) UpdateService(ctx context.Context, s *domain.Service
 	if len([]rune(s.Name)) > 255 || len([]rune(s.Description)) > 4000 {
 		return nil, domain.ErrInvalidInput
 	}
+	var fingerprint string
+	if s.RequestKey != "" {
+		var e error
+		fingerprint, e = serviceUpdateFingerprint(s.ID, s.BikkerID, category, s.Name, s.Description, thumbnail, s.IsActive, s.Photos)
+		if e != nil {
+			return nil, e
+		}
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, s.BikkerID+":"+s.RequestKey); err != nil {
+			return nil, err
+		}
+		var previousID, previousFingerprint string
+		err = tx.QueryRow(ctx, `SELECT id::text,COALESCE(request_fingerprint,'') FROM services WHERE bikker_id=$1::uuid AND request_key=$2`, s.BikkerID, s.RequestKey).Scan(&previousID, &previousFingerprint)
+		if err == nil {
+			if previousID != s.ID || previousFingerprint != fingerprint {
+				return nil, domain.ErrConflict
+			}
+			if err = tx.Commit(ctx); err != nil {
+				return nil, err
+			}
+			return r.getByID(ctx, previousID, true)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+	}
 	// Portfolio updates are full representations: an empty thumbnail deliberately
 	// clears a cover that the provider removed, instead of retaining stale media.
-	_, err = tx.Exec(ctx, `UPDATE services SET name=COALESCE(NULLIF($2,''),name),description=$3,thumbnail_url=$4,category_id=COALESCE(NULLIF($5,'')::uuid,category_id),is_active=$6,updated_at=NOW() WHERE id=$1::uuid`, s.ID, s.Name, s.Description, thumbnail, category, s.IsActive)
+	_, err = tx.Exec(ctx, `UPDATE services SET name=COALESCE(NULLIF($2,''),name),description=$3,thumbnail_url=$4,category_id=COALESCE(NULLIF($5,'')::uuid,category_id),is_active=$6,request_key=COALESCE(NULLIF($7,''),request_key),request_fingerprint=COALESCE(NULLIF($8,''),request_fingerprint),updated_at=NOW() WHERE id=$1::uuid`, s.ID, s.Name, s.Description, thumbnail, category, s.IsActive, s.RequestKey, fingerprint)
 	if err != nil {
 		return nil, err
 	}

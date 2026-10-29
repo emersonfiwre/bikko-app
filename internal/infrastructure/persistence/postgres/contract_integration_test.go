@@ -214,9 +214,18 @@ func TestPortfolioOwnershipSoftDeleteAndRollback(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM categories LIMIT 1`).Scan(&category); err != nil {
 		t.Fatal(err)
 	}
-	s, err := repo.CreateService(ctx, &domain.Service{BikkerID: provider, CategoryID: category, Name: "Panel repair", Latitude: -23.5614, Longitude: -46.6914, IsActive: true, Photos: []string{"https://media.test.invalid/photo.jpg"}})
+	s, err := repo.CreateService(ctx, &domain.Service{BikkerID: provider, CategoryID: category, Name: "Panel repair", Latitude: -23.5614, Longitude: -46.6914, IsActive: true, Photos: []string{"https://media.test.invalid/photo.jpg"}, RequestKey: "panel-create-1"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Idempotent retry returns identical service
+	replay, err := repo.CreateService(ctx, &domain.Service{BikkerID: provider, CategoryID: category, Name: "Panel repair", Latitude: -23.5614, Longitude: -46.6914, IsActive: true, Photos: []string{"https://media.test.invalid/photo.jpg"}, RequestKey: "panel-create-1"})
+	if err != nil || replay.ID != s.ID {
+		t.Fatalf("portfolio creation idempotent replay failed: %v", err)
+	}
+	// Conflict on different payload with same key
+	if _, err = repo.CreateService(ctx, &domain.Service{BikkerID: provider, CategoryID: category, Name: "Different name", Latitude: -23.5614, Longitude: -46.6914, IsActive: true, Photos: []string{"https://media.test.invalid/photo.jpg"}, RequestKey: "panel-create-1"}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("expected conflict on changed payload, got %v", err)
 	}
 	if _, err = pool.Exec(ctx, `UPDATE bikkers SET is_active=FALSE WHERE id=$1::uuid`, provider); err != nil {
 		t.Fatal(err)

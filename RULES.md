@@ -42,9 +42,9 @@ Estados de apresentação canônicos: `PENDING_BUDGET`, `BUDGET_RECEIVED`, `NEGO
 
 ## 5. Idempotência e falhas de rede
 
-- Criação de solicitação e avaliações exigem `Idempotency-Key` não vazio, com até 128 caracteres. Toda mutação de status, proposta, contraproposta, aceite, cancelamento e conclusão também deve receber uma chave estável do cliente.
+- Criação de solicitação, avaliações e mutações de portfólio (criação, edição e remoção de serviços) exigem `Idempotency-Key` não vazio, com até 128 caracteres. Toda mutação de status, proposta, contraproposta, aceite, cancelamento e conclusão também deve receber uma chave estável do cliente.
 - A chave é vinculada ao ator e ao fingerprint do payload. Mesmo ator + mesma chave + mesmo conteúdo = replay seguro; mesma chave + conteúdo diferente = `409`/conflito; chave nova para operação já concluída respeita a regra de duplicidade do domínio.
-- Repetições nunca podem criar proposta, pedido, avaliação, notificação ou atualização de reputação adicional.
+- Repetições nunca podem criar serviço, proposta, pedido, avaliação, notificação ou atualização de reputação adicional.
 - Use transações, locks e índices de unicidade como garantia. Não substitua essas proteções por memória de processo, mocks ou flags de UI.
 
 ## 6. Fotos, perfil e armazenamento

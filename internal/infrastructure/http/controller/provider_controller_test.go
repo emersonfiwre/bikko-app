@@ -147,3 +147,98 @@ func TestProviderEvaluationRequiresAndForwardsIdempotencyKey(t *testing.T) {
 		t.Fatalf("evaluation key was not forwarded: code=%d id=%q key=%q", w.Code, repo.evalID, repo.evalReq.RequestKey)
 	}
 }
+
+type serviceMutationStub struct {
+	domain.ServiceRepository
+	createdService *domain.Service
+	updatedService *domain.Service
+	deletedID      string
+	deletedActor   string
+}
+
+func (s *serviceMutationStub) CreateService(_ context.Context, service *domain.Service) (*domain.Service, error) {
+	s.createdService = service
+	service.ID = "service-new"
+	return service, nil
+}
+func (s *serviceMutationStub) UpdateService(_ context.Context, service *domain.Service) (*domain.Service, error) {
+	s.updatedService = service
+	return service, nil
+}
+func (s *serviceMutationStub) DeleteService(_ context.Context, id, bikkerID string) error {
+	s.deletedID = id
+	s.deletedActor = bikkerID
+	return nil
+}
+
+func TestPortfolioMutationsRequireAndForwardIdempotencyKey(t *testing.T) {
+	serviceRepo := &serviceMutationStub{}
+	ctrl := NewProviderControllerWithDeps(nil, serviceRepo, nil)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("userID", "provider-1")
+		c.Set("isBikker", true)
+	})
+	r.POST("/provider/portfolio", ctrl.AddPortfolioItem)
+	r.PUT("/provider/portfolio/:id", ctrl.UpdatePortfolioItem)
+	r.DELETE("/provider/portfolio/:id", ctrl.DeletePortfolioItem)
+
+	body := `{"name":"Service A","category":"cat-1","latitude":-23.5,"longitude":-46.6}`
+
+	// 1. POST without Idempotency-Key -> 400
+	reqNoKey := httptest.NewRequest("POST", "/provider/portfolio", strings.NewReader(body))
+	reqNoKey.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, reqNoKey)
+	if w.Code != 400 || serviceRepo.createdService != nil {
+		t.Fatalf("expected 400 without key, got %d", w.Code)
+	}
+
+	// 2. POST with Idempotency-Key -> 201 and forwarded key
+	reqWithKey := httptest.NewRequest("POST", "/provider/portfolio", strings.NewReader(body))
+	reqWithKey.Header.Set("Content-Type", "application/json")
+	reqWithKey.Header.Set("Idempotency-Key", "portfolio-create-key-1")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, reqWithKey)
+	if w.Code != 201 || serviceRepo.createdService == nil || serviceRepo.createdService.RequestKey != "portfolio-create-key-1" {
+		t.Fatalf("expected 201 with forwarded key, got code=%d service=%+v", w.Code, serviceRepo.createdService)
+	}
+
+	// 3. PUT without Idempotency-Key -> 400
+	reqPutNoKey := httptest.NewRequest("PUT", "/provider/portfolio/s-1", strings.NewReader(`{"name":"Service Updated"}`))
+	reqPutNoKey.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, reqPutNoKey)
+	if w.Code != 400 || serviceRepo.updatedService != nil {
+		t.Fatalf("expected 400 for PUT without key, got %d", w.Code)
+	}
+
+	// 4. PUT with Idempotency-Key -> 200 and forwarded key
+	reqPutWithKey := httptest.NewRequest("PUT", "/provider/portfolio/s-1", strings.NewReader(`{"name":"Service Updated"}`))
+	reqPutWithKey.Header.Set("Content-Type", "application/json")
+	reqPutWithKey.Header.Set("Idempotency-Key", "portfolio-update-key-1")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, reqPutWithKey)
+	if w.Code != 200 || serviceRepo.updatedService == nil || serviceRepo.updatedService.RequestKey != "portfolio-update-key-1" {
+		t.Fatalf("expected 200 with forwarded key, got code=%d service=%+v", w.Code, serviceRepo.updatedService)
+	}
+
+	// 5. DELETE without Idempotency-Key -> 400
+	reqDelNoKey := httptest.NewRequest("DELETE", "/provider/portfolio/s-1", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, reqDelNoKey)
+	if w.Code != 400 || serviceRepo.deletedID != "" {
+		t.Fatalf("expected 400 for DELETE without key, got %d", w.Code)
+	}
+
+	// 6. DELETE with Idempotency-Key -> 200
+	reqDelWithKey := httptest.NewRequest("DELETE", "/provider/portfolio/s-1", nil)
+	reqDelWithKey.Header.Set("Idempotency-Key", "portfolio-delete-key-1")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, reqDelWithKey)
+	if w.Code != 200 || serviceRepo.deletedID != "s-1" || serviceRepo.deletedActor != "provider-1" {
+		t.Fatalf("expected 200 for DELETE with key, got code=%d id=%q", w.Code, serviceRepo.deletedID)
+	}
+}
+

@@ -19,7 +19,7 @@ Both entrypoints expose the same modular API. The default local Compose runs one
 | POST/DELETE /users/device-token | UserController | X-App-Type scope | optional UserDeviceRepository; user_devices |
 | GET/POST /solicitations, GET /solicitations/:id, PATCH or POST /solicitations/:id/status | SolicitationController | SolicitationUseCase + authenticated actor | SolicitationPostgresRepository, requests/negotiations/orders/outbox |
 | GET /provider/feed,/provider/solicitations/:id; POST proposal/counter-offer/accept/reject | ProviderController | SolicitationUseCase + professional role | same SolicitationPostgresRepository; row locks and idempotency |
-| GET/POST/PUT/DELETE /provider/portfolio | ProviderController | ServiceMutationRepository, ownership | ServiceRepository transaction; services,photos,soft deletion |
+| GET/POST/PUT/DELETE /provider/portfolio | ProviderController | ServiceMutationRepository, ownership | ServiceRepository transaction; services,photos,soft deletion,idempotency |
 | PUT /provider/profile | ProviderController | professional role separate from availability | BikkerProfileUpdater, users/bikkers/services transaction |
 | POST /provider/evaluations | ProviderController | completed contract + participant | SolicitationPostgresRepository, client_reviews/ratings/outbox transaction |
 | POST /reviews,/orders/:id/review,/solicitations/:id/review | ReviewController | RatingUseCase, actual JWT reviewer | ReviewRepository, completed order, ratings/outbox transaction |
@@ -44,7 +44,7 @@ StorageUseCase → typed image MIME/size + user namespace → StorageService.Gen
 
 ## Schema and maintenance commands
 
-`migrations/*.up.sql` embedded in `migrations/migrate.go`: advisory lock, name/checksum ledger, legacy baseline, transaction before serving. `000007` replaces the duplicate historical password removal name. `000008` adds normalized active-phone uniqueness, contract idempotency/accepted proposal, user location, service deletion, devices, outbox and indexes.
+`migrations/*.up.sql` embedded in `migrations/migrate.go`: advisory lock, name/checksum ledger, legacy baseline, transaction before serving. `000007` replaces the duplicate historical password removal name. `000008` adds normalized active-phone uniqueness, contract idempotency/accepted proposal, user location, service deletion, devices, outbox and indexes. `000010` adds service portfolio idempotency (request_key and request_fingerprint index).
 
 `migrations.SeedLocalAccounts`: two named local accounts only; never inserts orders/portfolio and never resets completed test work. `cmd/reset-local-accounts --confirm-reset`: explicit development-only return of those accounts to empty data. `cmd/migrate`: same runner for administration.
 

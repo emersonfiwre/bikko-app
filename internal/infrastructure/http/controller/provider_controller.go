@@ -252,6 +252,10 @@ func (p *ProviderController) portfolioMutation(c *gin.Context, update bool) {
 	if !ok {
 		return
 	}
+	requestKey, ok := requiredIdempotencyKey(c)
+	if !ok {
+		return
+	}
 	repo, ok := p.serviceRepo.(domain.ServiceMutationRepository)
 	if !ok {
 		contractError(c, domain.ErrUnavailable)
@@ -278,7 +282,16 @@ func (p *ProviderController) portfolioMutation(c *gin.Context, update bool) {
 	if req.IsActive != nil {
 		active = *req.IsActive
 	}
-	s := &domain.Service{BikkerID: actor, Name: title, CategoryID: category, Description: strings.TrimSpace(req.Description), ThumbnailURL: thumbnail, Photos: req.Photos, IsActive: active}
+	s := &domain.Service{
+		BikkerID:           actor,
+		Name:               title,
+		CategoryID:         category,
+		Description:        strings.TrimSpace(req.Description),
+		ThumbnailURL:       thumbnail,
+		Photos:             req.Photos,
+		IsActive:           active,
+		RequestKey:         requestKey,
+	}
 	var err error
 	if update {
 		s.ID = c.Param("id")
@@ -309,6 +322,9 @@ func (p *ProviderController) UpdatePortfolioItem(c *gin.Context) { p.portfolioMu
 func (p *ProviderController) DeletePortfolioItem(c *gin.Context) {
 	actor, ok := p.actor(c)
 	if !ok {
+		return
+	}
+	if _, ok := requiredIdempotencyKey(c); !ok {
 		return
 	}
 	repo, ok := p.serviceRepo.(domain.ServiceMutationRepository)
