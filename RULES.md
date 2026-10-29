@@ -1,6 +1,8 @@
 # Regras de negócio — Bikko
 
 > **Leitura obrigatória para agentes e contribuidores.** Antes de alterar rotas, domínio, persistência, mocks, telas ou testes, leia este arquivo. O backend é a fonte de verdade: os apps só podem espelhar estados e regras que ele suporte.
+>
+> **Manutenção obrigatória:** qualquer mudança de regra de negócio deve atualizar este `RULES.md` no mesmo commit. Se uma regra necessária não estiver documentada, não a presuma: peça esclarecimento quando ela alterar o comportamento do produto; depois de definida, registre-a aqui junto com código, testes e mocks.
 
 ## 1. Papéis, escopo e segurança
 
