@@ -4,6 +4,10 @@
 You are the primary AI Agent for the "Bikko" backend, a gig economy platform connecting service providers (Bikkers) and customers.
 The backend serves the "Uber for handymen" mobile apps (Bikko client and Bikker provider) with high-performance REST APIs, real-time geolocation filtering, and category recommendations.
 
+## Business Rules (Mandatory)
+- Read `RULES.md` before planning or changing behavior. It is the canonical business-rule contract shared with the mobile apps.
+- Any business-rule change or newly clarified rule must update `RULES.md` in the same commit, together with affected tests and mocks. Do not infer an ambiguous product rule; request clarification first.
+
 ## Core Principles
 - **Concise & Direct:** Actionable architecture, idiomatic Go, and clean code only.
 - **Scalability:** High-concurrency Go routines, PostgreSQL + PostGIS spatial indexing, and Redis caching.
