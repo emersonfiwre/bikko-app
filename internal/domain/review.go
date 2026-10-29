@@ -16,13 +16,16 @@ type Review struct {
 	LikeCount    int       `json:"like_count"`
 	DislikeCount int       `json:"dislike_count"`
 	CreatedAt    time.Time `json:"created_at"`
+	// RequestKey is transport metadata used only to make a client retry safe.
+	RequestKey string `json:"-"`
 }
 
 type CreateReviewInput struct {
-	OrderID    string `json:"order_id" binding:"required"`
-	ReviewerID string `json:"reviewer_id" binding:"required"`
-	Rating     int    `json:"rating" binding:"required,min=1,max=5"`
+	OrderID    string `json:"order_id"`
+	ReviewerID string `json:"reviewer_id"`
+	Rating     int    `json:"rating"`
 	Comment    string `json:"comment"`
+	RequestKey string `json:"-"`
 }
 
 type ReviewRepository interface {

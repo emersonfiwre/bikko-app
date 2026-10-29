@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   app:
     build:
@@ -7,10 +5,14 @@ services:
       dockerfile: Dockerfile
     container_name: bikko-backend-app
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - PORT=8080
       - ENV=development
+      - JWT_SECRET=local-development-only-jwt-secret-minimum-32-characters
+      - LOCAL_TEST_ACCOUNTS=true
+      - LOCAL_STORAGE=true
+      - LOCAL_STORAGE_DIR=/app/.local-media
       - DB_HOST=db
       - DB_PORT=5432
       - DB_USER=bikko
@@ -24,20 +26,21 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - bikko_local_media:/app/.local-media
     restart: always
 
   db:
     image: postgis/postgis:16-3.4-alpine
     container_name: bikko-postgres-db
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       - POSTGRES_USER=bikko
       - POSTGRES_PASSWORD=bikkopass
       - POSTGRES_DB=bikkodb
     volumes:
       - bikko_postgres_data:/var/lib/postgresql/data
-      - ./migrations/000001_init_schema.up.sql:/docker-entrypoint-initdb.d/01_init_schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bikko -d bikkodb"]
       interval: 5s
@@ -48,7 +51,7 @@ services:
     image: redis:7-alpine
     container_name: bikko-redis-cache
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - bikko_redis_data:/data
     healthcheck:
@@ -57,6 +60,40 @@ services:
       timeout: 5s
       retries: 5
 
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: bikko-prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - bikko_prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    depends_on:
+      - app
+    restart: always
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: bikko-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - bikko_grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: always
+
 volumes:
   bikko_postgres_data:
   bikko_redis_data:
+  bikko_prometheus_data:
+  bikko_grafana_data:
+  bikko_local_media:

@@ -24,6 +24,7 @@ func (uc *RatingUseCase) CreateReview(ctx context.Context, input domain.CreateRe
 		ReviewerID: input.ReviewerID,
 		Rating:     input.Rating,
 		Comment:    input.Comment,
+		RequestKey: input.RequestKey,
 	}
 
 	if err := uc.reviewRepo.CreateReviewInTx(ctx, review); err != nil {

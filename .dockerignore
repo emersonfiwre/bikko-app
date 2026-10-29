@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+.local-media
+server
+api
+*.out
+*.prof
+.DS_Store
